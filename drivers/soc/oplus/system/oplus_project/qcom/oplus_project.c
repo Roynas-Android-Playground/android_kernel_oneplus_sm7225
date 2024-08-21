@@ -327,7 +327,7 @@ uint32_t get_oplus_feature(enum F_INDEX index)
 EXPORT_SYMBOL(get_oplus_feature);
 
 #define SERIALNO_LEN 16
-unsigned int get_serialID()
+unsigned int get_serialID(void)
 {
     unsigned int serial_id = 0xFFFFFFFF;
 
@@ -434,7 +434,7 @@ static void dump_secure_stage(struct seq_file *s)
     seq_printf(s, "%d", secure_oem_config);
 }
 
-static void update_manifest(struct proc_dir_entry *parent)
+static void __init update_manifest(struct proc_dir_entry *parent)
 {
     static const char* manifest_src[2] = {
         "/vendor/odm/etc/vintf/manifest_ssss.xml",
@@ -463,7 +463,7 @@ static void update_manifest(struct proc_dir_entry *parent)
     set_fs(fs);
 }
 
-static void update_telephony_manifest(struct proc_dir_entry *parent)
+static void __init update_telephony_manifest(struct proc_dir_entry *parent)
 {
     static const char* manifest_src[2] = {
         "/vendor/odm/etc/vintf/telephony_manifest_ssss.xml",
@@ -552,7 +552,7 @@ static int project_read_func(struct seq_file *s, void *v)
     return 0;
 }
 
-unsigned int get_cdt_version()
+unsigned int get_cdt_version(void)
 {
     init_project_version();
 
