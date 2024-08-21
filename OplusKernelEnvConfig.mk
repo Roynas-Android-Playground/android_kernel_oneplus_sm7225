@@ -137,12 +137,18 @@ ifeq ($(OPLUS_FEATURE_GAMMA_SWITCH_KERNEL), yes)
 endif
 
 
+ifeq ($(EXPORT_MAKEFILE_V),)
 $(foreach myfeature,$(ALLOWED_MCROS),\
          $(eval KBUILD_CFLAGS += -D$(myfeature)) \
          $(eval KBUILD_CPPFLAGS += -D$(myfeature)) \
          $(eval CFLAGS_KERNEL += -D$(myfeature)) \
          $(eval CFLAGS_MODULE += -D$(myfeature)) \
 )
+else
+$(foreach myfeature,$(ALLOWED_MCROS),\
+	$(eval $(myfeature) := yes) \
+)
+endif
 
 # BSP team can do customzation by referring the feature variables
 
