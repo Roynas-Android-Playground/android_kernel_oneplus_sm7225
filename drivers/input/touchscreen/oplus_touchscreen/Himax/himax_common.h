@@ -14,6 +14,7 @@
 #include <linux/time.h>
 
 #include "../touchpanel_common.h"
+#include "../touchpanel_healthinfo.h"
 #include <soc/oplus/system/oplus_project.h>
 #include <soc/oplus/device_info.h>
 

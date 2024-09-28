@@ -63,7 +63,6 @@
 		qcom,pcop_threshold2 = <500>;
 		qcom,fod_threshold = <400>;
 		rx,soc_threshold = <90>;
-		unhealth_memory_handle_support;
 	};
 };
 

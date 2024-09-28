@@ -53,50 +53,52 @@
             printk(a, ##arg);\
     }while(0)
 
-struct himax_report_data *hx_touch_data;
-struct chip_data_hx83112f *g_chip_info;
-int himax_touch_data_size = 128;
-int HX_HW_RESET_ACTIVATE = 0;
-static int HX_TOUCH_INFO_POINT_CNT   = 0;
-int g_lcd_vendor = 0;
-int irq_en_cnt = 0;
+struct hx83112f_report_data *hx83112f_hx_touch_data;
+struct chip_data_hx83112f *hx83112f_g_chip_info;
+int hx83112f_touch_data_size = 128;
+int hx83112f_hx_hw_reset_activate = 0;
+int HX83112F_HX_TOUCH_INFO_POINT_CNT   = 0;
+int hx83112f_g_lcd_vendor = 0;
+int hx83112f_irq_en_cnt = 0;
 
-int g_1kind_raw_size = 0;
-uint32_t g_rslt_data_len;
-char *g_rslt_data;
+int hx83112f_g_1kind_raw_size = 0;
+uint32_t hx83112f_g_rslt_data_len;
+char *hx83112f_g_rslt_data;
 int **hx83112f_nf_inspection_criteria;
 int *hx83112f_nf_inspt_crtra_flag;
-int HX_CRITERIA_ITEM = 4;
-int HX_CRITERIA_SIZE;
-char *g_file_path_OK;
-char *g_file_path_NG;
-bool isRead_csv = true;
+int hx83112f_hx_criteria_item = 4;
+int hx83112f_hx_criteria_size;
+char *hx83112f_g_file_path_OK;
+char *hx83112f_g_file_path_NG;
+bool hx83112f_isread_csv = true;
 int hx83112f_nf_fail_write_count;
 
-extern int g_f_0f_updat;
-int g_zero_event_count = 0;
+extern int hx83112f_g_f_0f_updat;
+int hx83112f_g_zero_event_count = 0;
 /* 128k+ */
 int hx83112f_nf_cfg_crc = -1;
 int hx83112f_nf_cfg_sz;
 uint8_t hx83112f_nf_sram_min[4];
 unsigned char *hx83112f_nf_FW_buf;
 /* 128k- */
-struct himax_core_fp g_core_fp;
+struct hx83112f_core_fp hx83112f_g_core_fp;
 
-int check_point_format;
-unsigned char switch_algo;
-uint8_t HX_PROC_SEND_FLAG;
-
+int hx83112f_check_point_format;
+unsigned char hx83112f_switch_algo;
+uint8_t HX83112F_HX_PROC_SEND_FLAG;
+static uint8_t *g_internal_buffer = NULL;
+#define HX_SPI_GEN_MAX_WRITE_SZ (64*1024)
 
 /*******Part0: SPI Interface***************/
 #ifdef CONFIG_TOUCHPANEL_MTK_PLATFORM
-const struct mtk_chip_config hx_spi_ctrdata = {
+const struct mtk_chip_config hx83112f_hx_spi_ctrdata = {
     .rx_mlsb = 1,
     .tx_mlsb = 1,
-    .cs_pol = 0,
+    /*.cs_pol = 0,*/
+	.cs_setuptime = 30,
 };
 #else
-const struct mt_chip_conf hx_spi_ctrdata = {
+const struct mt_chip_conf hx83112f_hx_spi_ctrdata = {
     .setuptime = 25,
     .holdtime = 25,
     .high_time = 3, /* 16.6MHz */
@@ -123,7 +125,7 @@ const struct mt_chip_conf hx_spi_ctrdata = {
 };
 #endif
 
-static ssize_t himax_spi_sync(struct touchpanel_data *ts, struct spi_message *message)
+static ssize_t hx83112f_spi_sync(struct touchpanel_data *ts, struct spi_message *message)
 {
     int status;
 
@@ -137,7 +139,7 @@ static ssize_t himax_spi_sync(struct touchpanel_data *ts, struct spi_message *me
     return status;
 }
 
-static int himax_spi_read(uint8_t *command, uint8_t command_len, uint8_t *data, uint32_t length, uint8_t toRetry)
+static int hx83112f_spi_read(uint8_t *command, uint8_t command_len, uint8_t *data, uint32_t length, uint8_t toRetry)
 {
     struct spi_message message;
     struct spi_transfer xfer[2];
@@ -156,7 +158,7 @@ static int himax_spi_read(uint8_t *command, uint8_t command_len, uint8_t *data, 
     spi_message_add_tail(&xfer[1], &message);
 
     for (retry = 0; retry < toRetry; retry++) {
-        error = spi_sync(private_ts->s_client, &message);
+        error = spi_sync(hx83112f_private_ts->s_client, &message);
         if (error) {
             TPD_INFO("SPI read error: %d\n", error);
         } else {
@@ -172,7 +174,7 @@ static int himax_spi_read(uint8_t *command, uint8_t command_len, uint8_t *data, 
     return 0;
 }
 
-static int himax_spi_write(uint8_t *buf, uint32_t length)
+static int hx83112f_spi_write(uint8_t *buf, uint32_t length)
 {
 
     struct spi_transfer t = {
@@ -183,25 +185,25 @@ static int himax_spi_write(uint8_t *buf, uint32_t length)
     spi_message_init(&m);
     spi_message_add_tail(&t, &m);
 
-    return himax_spi_sync(private_ts, &m);
+    return hx83112f_spi_sync(hx83112f_private_ts, &m);
 }
 
-static int himax_bus_read(uint8_t command, uint32_t length, uint8_t *data)
+static int hx83112f_bus_read(uint8_t command, uint32_t length, uint8_t *data)
 {
     int result = 0;
     uint8_t spi_format_buf[3];
 
-    mutex_lock(&(g_chip_info->spi_lock));
+    mutex_lock(&(hx83112f_g_chip_info->spi_lock));
     spi_format_buf[0] = 0xF3;
     spi_format_buf[1] = command;
     spi_format_buf[2] = 0x00;
-    result = himax_spi_read(&spi_format_buf[0], 3, data, length, 10);
-    mutex_unlock(&(g_chip_info->spi_lock));
+    result = hx83112f_spi_read(&spi_format_buf[0], 3, data, length, 10);
+    mutex_unlock(&(hx83112f_g_chip_info->spi_lock));
 
     return result;
 }
 
-static int himax_bus_write(uint8_t command, uint32_t length, uint8_t *data)
+static int hx83112f_bus_write(uint8_t command, uint32_t length, uint8_t *data)
 {
     /* uint8_t spi_format_buf[length + 2]; */
     int result = 0;
@@ -212,7 +214,7 @@ static int himax_bus_write(uint8_t command, uint32_t length, uint8_t *data)
 #else
     alloc_size = 49156;
 #endif
-    mutex_lock(&(g_chip_info->spi_lock));
+    mutex_lock(&(hx83112f_g_chip_info->spi_lock));
     if (spi_format_buf == NULL) {
         spi_format_buf = kzalloc((alloc_size + 2) * sizeof(uint8_t), GFP_KERNEL);
     }
@@ -225,8 +227,8 @@ static int himax_bus_write(uint8_t command, uint32_t length, uint8_t *data)
     spi_format_buf[1] = command;
 
     memcpy((uint8_t *)(&spi_format_buf[2]), data, length);
-    result = himax_spi_write(spi_format_buf, length + 2);
-    mutex_unlock(&(g_chip_info->spi_lock));
+    result = hx83112f_spi_write(spi_format_buf, length + 2);
+    mutex_unlock(&(hx83112f_g_chip_info->spi_lock));
 
     return result;
 }
@@ -235,11 +237,11 @@ static int himax_bus_write(uint8_t command, uint32_t length, uint8_t *data)
 static int hx83112f_power_control(void *chip_data, bool enable);
 static int hx83112f_get_chip_info(void *chip_data);
 static int hx83112f_mode_switch(void *chip_data, work_mode mode, bool flag);
-static uint32_t himax_hw_check_CRC(uint8_t *start_addr, int reload_length);
+static uint32_t hx83112f_hw_check_CRC(uint8_t *start_addr, int reload_length);
 static fw_check_state hx83112f_fw_check(void *chip_data,
                                         struct resolution_info *resolution_info,
                                         struct panel_info *panel_data);
-static void himax_read_FW_ver(void);
+static void hx83112f_read_FW_ver(void);
 #ifdef HX_RST_PIN_FUNC
 static int hx83112f_resetgpio_set(struct hw_resource *hw_res, bool on);
 #endif
@@ -250,112 +252,110 @@ void __attribute__((weak)) switch_spi7cs_state(bool normal)
 /*******Part2:Call Back Function implement*******/
 
 /* add for himax */
-void himax_flash_write_burst(uint8_t *reg_byte, uint8_t *write_data)
+void hx83112f_flash_write_burst(uint8_t *reg_byte, uint8_t *write_data)
 {
     uint8_t data_byte[8];
-    int i = 0;
-    int j = 0;
 
     memcpy(data_byte, reg_byte, 4);
     memcpy(data_byte + 4, write_data, 4);
 
-    if (himax_bus_write(0x00, 8, data_byte) < 0)
+    if (hx83112f_bus_write(0x00, 8, data_byte) < 0)
         TPD_INFO("%s: spi bus access fail!\n", __func__);
 
     return;
 }
 
-void himax_flash_write_burst_length(uint8_t *reg_byte,
+void hx83112f_flash_write_burst_length(uint8_t *reg_byte,
                                     uint8_t *write_data, int length)
 {
-    uint8_t *data_byte;
-    data_byte = kzalloc(sizeof(uint8_t) * (length + 4), GFP_KERNEL);
+	uint8_t *data_byte = NULL;
 
-    if (data_byte == NULL) {
-        TPD_INFO("%s: Can't allocate enough buf\n", __func__);
-        return;
-    }
+	if (!g_internal_buffer) {
+		TPD_INFO("%s: internal buffer not initialized!\n", __func__);
+		return;
+	}
+	memset(g_internal_buffer, 0x00, sizeof(uint8_t) * HX_SPI_GEN_MAX_WRITE_SZ);
+	data_byte = g_internal_buffer;
     memcpy(data_byte, reg_byte, 4); /* assign addr 4bytes */
     memcpy(data_byte + 4, write_data, length); /* assign data n bytes */
 
-    if (himax_bus_write(0, length + 4, data_byte) < 0)
+    if (hx83112f_bus_write(0, length + 4, data_byte) < 0)
         TPD_INFO("%s: spi bus access fail!\n", __func__);
 
-    kfree(data_byte);
 }
 
-void himax_burst_enable(uint8_t auto_add_4_byte)
+void hx83112f_burst_enable(uint8_t auto_add_4_byte)
 {
     uint8_t tmp_data[4];
     tmp_data[0] = 0x31;
 
-    if (himax_bus_write(0x13, 1, tmp_data) < 0) {
+    if (hx83112f_bus_write(0x13, 1, tmp_data) < 0) {
         TPD_INFO("%s: spi bus access fail!\n", __func__);
         return;
     }
 
     tmp_data[0] = (0x10 | auto_add_4_byte);
-    if (himax_bus_write(0x0D, 1, tmp_data) < 0) {
+    if (hx83112f_bus_write(0x0D, 1, tmp_data) < 0) {
         TPD_INFO("%s: spi bus access fail!\n", __func__);
         return;
     }
 }
 
-void himax_register_read(uint8_t *read_addr, int read_length,
-                         uint8_t *read_data, bool cfg_flag)
+void hx83112f_register_read(uint8_t *read_addr, int read_length,
+                         uint8_t *read_data, bool hx83112f_cfg_flag)
 {
     uint8_t tmp_data[4];
     int ret;
-    if (cfg_flag == false) {
+    if (hx83112f_cfg_flag == false) {
         if (read_length > 256) {
             TPD_INFO("%s: read len over 256!\n", __func__);
             return;
         }
         if (read_length > 4) {
-            himax_burst_enable(1);
+            hx83112f_burst_enable(1);
         } else {
-            himax_burst_enable(0);
+            hx83112f_burst_enable(0);
         }
 
         tmp_data[0] = read_addr[0];
         tmp_data[1] = read_addr[1];
         tmp_data[2] = read_addr[2];
         tmp_data[3] = read_addr[3];
-        ret = himax_bus_write(0x00, 4, tmp_data);
+        ret = hx83112f_bus_write(0x00, 4, tmp_data);
         if (ret < 0) {
             TPD_INFO("%s: spi bus access fail!\n", __func__);
             return;
         }
         tmp_data[0] = 0x00;
-        ret = himax_bus_write(0x0C, 1, tmp_data);
+        ret = hx83112f_bus_write(0x0C, 1, tmp_data);
         if (ret < 0) {
             TPD_INFO("%s: spi bus access fail!\n", __func__);
             return;
         }
 
-        if (himax_bus_read(0x08, read_length, read_data) < 0) {
+        if (hx83112f_bus_read(0x08, read_length, read_data) < 0) {
             TPD_INFO("%s: spi bus access fail!\n", __func__);
             return;
         }
         if (read_length > 4) {
-            himax_burst_enable(0);
+            hx83112f_burst_enable(0);
         }
-    } else if (cfg_flag == true) {
-        if(himax_bus_read(read_addr[0], read_length, read_data) < 0) {
+    } else if (hx83112f_cfg_flag == true) {
+        if(hx83112f_bus_read(read_addr[0], read_length, read_data) < 0) {
             TPD_INFO("%s: spi bus access fail!\n", __func__);
             return;
         }
     } else {
-        TPD_INFO("%s: cfg_flag = %d, value is wrong!\n", __func__, cfg_flag);
+        TPD_INFO("%s: hx83112f_cfg_flag = %d, value is wrong!\n", __func__, hx83112f_cfg_flag);
         return;
     }
 }
 
-void himax_register_write(uint8_t *write_addr, int write_length, uint8_t *write_data, bool cfg_flag)
+void hx83112f_register_write(uint8_t *write_addr, int write_length, uint8_t *write_data, bool hx83112f_cfg_flag)
 {
     int i = 0;
     int address = 0;
-    if (cfg_flag == false) {
+    if (hx83112f_cfg_flag == false) {
         address = (write_addr[3] << 24)
                   + (write_addr[2] << 16)
                   + (write_addr[1] << 8)
@@ -363,25 +363,25 @@ void himax_register_write(uint8_t *write_addr, int write_length, uint8_t *write_
 
         for (i = address; i < address + write_length; i++) {
             if (write_length > 4) {
-                himax_burst_enable(1);
+                hx83112f_burst_enable(1);
             } else {
-                himax_burst_enable(0);
+                hx83112f_burst_enable(0);
             }
-            himax_flash_write_burst_length(write_addr, write_data, write_length);
+            hx83112f_flash_write_burst_length(write_addr, write_data, write_length);
         }
-    } else if (cfg_flag == true) {
-        if (himax_bus_write(write_addr[0], write_length, write_data) < 0) {
+    } else if (hx83112f_cfg_flag == true) {
+        if (hx83112f_bus_write(write_addr[0], write_length, write_data) < 0) {
             TPD_INFO("%s: spi bus access fail!\n", __func__);
             return;
         }
     } else {
-        TPD_INFO("%s: cfg_flag = %d, value is wrong!\n", __func__, cfg_flag);
+        TPD_INFO("%s: hx83112f_cfg_flag = %d, value is wrong!\n", __func__, hx83112f_cfg_flag);
         return;
     }
 }
 
-static int himax_mcu_register_write(uint8_t *write_addr, uint32_t write_length,
-                                    uint8_t *write_data, uint8_t cfg_flag)
+static int hx83112f_mcu_register_write(uint8_t *write_addr, uint32_t write_length,
+                                    uint8_t *write_data, uint8_t hx83112f_cfg_flag)
 {
     int total_read_times = 0;
     int max_bus_size = 128, test = 0;
@@ -410,7 +410,7 @@ static int himax_mcu_register_write(uint8_t *write_addr, uint32_t write_length,
     }
 #endif
 
-    himax_burst_enable(1);
+    hx83112f_burst_enable(1);
 
     tmp_addr[3] = write_addr[3];
     tmp_addr[2] = write_addr[2];
@@ -434,7 +434,7 @@ static int himax_mcu_register_write(uint8_t *write_addr, uint32_t write_length,
     for (i = 0; i < (total_read_times); i++) {
         if (total_size_temp >= max_bus_size) {
             memcpy (tmp_data, write_data + (i * max_bus_size), max_bus_size);
-            himax_flash_write_burst_length (tmp_addr, tmp_data, max_bus_size);
+            hx83112f_flash_write_burst_length (tmp_addr, tmp_data, max_bus_size);
 
             total_size_temp = total_size_temp - max_bus_size;
         } else {
@@ -442,7 +442,7 @@ static int himax_mcu_register_write(uint8_t *write_addr, uint32_t write_length,
             memcpy (tmp_data, write_data + (i * max_bus_size), test);
             TPD_DEBUG("last total_size_temp=%d\n", total_size_temp % max_bus_size);
 
-            himax_flash_write_burst_length (tmp_addr, tmp_data, max_bus_size);
+            hx83112f_flash_write_burst_length (tmp_addr, tmp_data, max_bus_size);
         }
 
         address = ((i + 1) * max_bus_size);
@@ -461,16 +461,16 @@ static int himax_mcu_register_write(uint8_t *write_addr, uint32_t write_length,
     return 0;
 }
 
-void hx_chk_write_register(uint8_t *addr, uint8_t *data)
+void hx83112f_hx_chk_write_register(uint8_t *addr, uint8_t *data)
 {
     uint8_t read_data[4] = {0};
     int retry = 10;
 
     TPD_INFO("%s: Now write  addr=0x%02X%02X%02X%02X", __func__, addr[3], addr[2], addr[1], addr[0]);
     do {
-        himax_flash_write_burst_length(addr, data, 4);
+        hx83112f_flash_write_burst_length(addr, data, 4);
         msleep(1);
-        himax_register_read(addr, 4, read_data, false);
+        hx83112f_register_read(addr, 4, read_data, false);
         msleep(1);
         TPD_INFO("%s: times %d,Now read[3]=0x%02X,read[2]=0x%02X,read[1]=0x%02X,read[0]=0x%02X\n",
                  __func__, retry, read_data[3], read_data[2], read_data[1], read_data[0]);
@@ -483,7 +483,7 @@ void hx_chk_write_register(uint8_t *addr, uint8_t *data)
     TPD_INFO("%s:END", __func__);
 }
 
-bool himax_mcu_sys_reset(void)
+bool hx83112f_mcu_sys_reset(void)
 {
     TPD_INFO("%s: called \n", __func__);
     uint8_t tmp_addr[4];
@@ -493,19 +493,19 @@ bool himax_mcu_sys_reset(void)
     do {
         /* addr:0x31 write value:0x27 */
         tmp_data[0] = 0x27;
-        if (himax_bus_write(0x31, 1, tmp_data) < 0) {
+        if (hx83112f_bus_write(0x31, 1, tmp_data) < 0) {
             TPD_INFO("%s: spi bus access fail!\n", __func__);
             return false;
         }
         /* addr:0x32 write value:0x95 */
         tmp_data[0] = 0x95;
-        if (himax_bus_write(0x32, 1, tmp_data) < 0) {
+        if (hx83112f_bus_write(0x32, 1, tmp_data) < 0) {
             TPD_INFO("%s: spi bus access fail!\n", __func__);
             return false;
         }
         /* addr:0x31 write value:0x00 */
         tmp_data[0] = 0x00;
-        if (himax_bus_write(0x31, 1, tmp_data) < 0) {
+        if (hx83112f_bus_write(0x31, 1, tmp_data) < 0) {
             TPD_INFO("%s: spi bus access fail!\n", __func__);
             return false;
         }
@@ -515,7 +515,7 @@ bool himax_mcu_sys_reset(void)
         tmp_addr[2] = 0x00;
         tmp_addr[1] = 0x00;
         tmp_addr[0] = 0xE4;
-        himax_register_read(tmp_addr, 4, tmp_data, false);
+        hx83112f_register_read(tmp_addr, 4, tmp_data, false);
     } while ((tmp_data[1] != 0x02 || tmp_data[0] != 0x00) && retry++ < 5);
 
     usleep_range(2000, 2001);
@@ -528,11 +528,11 @@ bool himax_mcu_sys_reset(void)
     tmp_data[2] = 0x00;
     tmp_data[1] = 0x35;
     tmp_data[0] = 0xCA;
-    himax_flash_write_burst_length(tmp_addr, tmp_data, 4);
+    hx83112f_flash_write_burst_length(tmp_addr, tmp_data, 4);
 
     usleep_range(2000, 2001);
 
-    himax_register_read(tmp_addr, 4, tmp_data, false);
+    hx83112f_register_read(tmp_addr, 4, tmp_data, false);
     TPD_INFO("%s: Now addr=0x%02X%02X%02X%02X, value=0x%02X%02X%02X%02X\n",
              __func__, tmp_addr[3], tmp_addr[2], tmp_addr[1], tmp_addr[0],
              tmp_data[3], tmp_data[2], tmp_data[1], tmp_data[0]);
@@ -541,7 +541,7 @@ bool himax_mcu_sys_reset(void)
     tmp_addr[2] = 0x00;
     tmp_addr[1] = 0x80;
     tmp_addr[0] = 0x04;
-    himax_register_read(tmp_addr, 4, tmp_data, false);
+    hx83112f_register_read(tmp_addr, 4, tmp_data, false);
     TPD_INFO("%s: Now addr=0x%02X%02X%02X%02X, value=0x%02X%02X%02X%02X\n",
              __func__, tmp_addr[3], tmp_addr[2], tmp_addr[1], tmp_addr[0],
              tmp_data[3], tmp_data[2], tmp_data[1], tmp_data[0]);
@@ -550,7 +550,7 @@ bool himax_mcu_sys_reset(void)
 }
 
 
-bool himax_sense_off(void)
+bool hx83112f_sense_off(void)
 {
     uint8_t cnt = 0;
     uint8_t tmp_addr[4];
@@ -569,13 +569,13 @@ bool himax_sense_off(void)
             tmp_data[2] = 0x00;
             tmp_data[1] = 0x00;
             tmp_data[0] = 0xA5;
-            himax_flash_write_burst(tmp_addr, tmp_data);
+            hx83112f_flash_write_burst(tmp_addr, tmp_data);
 
             tmp_addr[3] = 0x90;
             tmp_addr[2] = 0x00;
             tmp_addr[1] = 0x00;
             tmp_addr[0] = 0xA8;
-            himax_register_read(tmp_addr, 4, tmp_data, false);
+            hx83112f_register_read(tmp_addr, 4, tmp_data, false);
             if (tmp_data[0] != 0x05) {
                 TPD_INFO("%s: it already in safe mode=0x%02X\n", __func__, tmp_data[0]);
                 break;
@@ -586,7 +586,7 @@ bool himax_sense_off(void)
         tmp_addr[2] = 0x00;
         tmp_addr[1] = 0x00;
         tmp_addr[0] = 0x5C;
-        himax_register_read(tmp_addr, 4, tmp_data, false);
+        hx83112f_register_read(tmp_addr, 4, tmp_data, false);
         cnt++;
         TPD_INFO("%s: save mode lock cnt = %d, data[0] = %2X!\n", __func__, cnt, tmp_data[0]);
     } while (tmp_data[0] != 0x87 && (cnt < 50));
@@ -596,13 +596,13 @@ bool himax_sense_off(void)
     do {
         /* addr:0x31 write value:0x27*/
         tmp_data[0] = 0x27;
-        if (himax_bus_write(0x31, 1, tmp_data) < 0) {
+        if (hx83112f_bus_write(0x31, 1, tmp_data) < 0) {
             TPD_INFO("%s: spi bus access fail!\n", __func__);
             return false;
         }
         /* addr:0x32 write value:0x95*/
         tmp_data[0] = 0x95;
-        if (himax_bus_write(0x32, 1, tmp_data) < 0) {
+        if (hx83112f_bus_write(0x32, 1, tmp_data) < 0) {
             TPD_INFO("%s: spi bus access fail!\n", __func__);
             return false;
         }
@@ -611,7 +611,7 @@ bool himax_sense_off(void)
         tmp_addr[2] = 0x00;
         tmp_addr[1] = 0x00;
         tmp_addr[0] = 0xA8;
-        himax_register_read(tmp_addr, 4, tmp_data, false);
+        hx83112f_register_read(tmp_addr, 4, tmp_data, false);
 
         TPD_INFO("%s: Check enter_save_mode data[0]=%X \n", __func__, tmp_data[0]);
 
@@ -625,13 +625,13 @@ bool himax_sense_off(void)
             tmp_data[2] = 0x00;
             tmp_data[1] = 0x00;
             tmp_data[0] = 0x00;
-            himax_flash_write_burst(tmp_addr, tmp_data);
+            hx83112f_flash_write_burst(tmp_addr, tmp_data);
             msleep(1);
             tmp_data[3] = 0x00;
             tmp_data[2] = 0x00;
             tmp_data[1] = 0x00;
             tmp_data[0] = 0x01;
-            himax_flash_write_burst(tmp_addr, tmp_data);
+            hx83112f_flash_write_burst(tmp_addr, tmp_data);
 
             /* Reset ADC */
             tmp_addr[3] = 0x80;
@@ -642,37 +642,37 @@ bool himax_sense_off(void)
             tmp_data[2] = 0x00;
             tmp_data[1] = 0x00;
             tmp_data[0] = 0x00;
-            himax_flash_write_burst(tmp_addr, tmp_data);
+            hx83112f_flash_write_burst(tmp_addr, tmp_data);
             msleep(1);
             tmp_data[3] = 0x00;
             tmp_data[2] = 0x00;
             tmp_data[1] = 0x00;
             tmp_data[0] = 0x01;
-            himax_flash_write_burst(tmp_addr, tmp_data);
+            hx83112f_flash_write_burst(tmp_addr, tmp_data);
             return true;
         } else {
             msleep(10);
 #ifdef HX_RST_PIN_FUNC
-            hx83112f_resetgpio_set(g_chip_info->hw_res, false);
-            hx83112f_resetgpio_set(g_chip_info->hw_res, true);
+            hx83112f_resetgpio_set(hx83112f_g_chip_info->hw_res, false);
+            hx83112f_resetgpio_set(hx83112f_g_chip_info->hw_res, true);
 #else
-            himax_mcu_sys_reset();
+            hx83112f_mcu_sys_reset();
 #endif
         }
     } while (cnt++ < 15);
 
     if (cnt >= 15) {
 #ifdef HX_RST_PIN_FUNC
-        hx83112f_resetgpio_set(g_chip_info->hw_res, false); // reset gpio
-        hx83112f_resetgpio_set(g_chip_info->hw_res, true); // reset gpio
+        hx83112f_resetgpio_set(hx83112f_g_chip_info->hw_res, false); // reset gpio
+        hx83112f_resetgpio_set(hx83112f_g_chip_info->hw_res, true); // reset gpio
 #else
-        himax_mcu_sys_reset();
+        hx83112f_mcu_sys_reset();
 #endif
         //===========================================
         //  0x31 ==> 0x27
         //===========================================
         tmp_data[0] = 0x27;
-        if (himax_bus_write(0x31, 1, tmp_data) < 0) {
+        if (hx83112f_bus_write(0x31, 1, tmp_data) < 0) {
             TPD_INFO("%s: i2c access fail!\n", __func__);
             return false;
         }
@@ -680,7 +680,7 @@ bool himax_sense_off(void)
         //  0x32 ==> 0x95
         //===========================================
         tmp_data[0] = 0x95;
-        if (himax_bus_write(0x32, 1, tmp_data) < 0) {
+        if (hx83112f_bus_write(0x32, 1, tmp_data) < 0) {
             TPD_INFO("%s: i2c access fail!\n", __func__);
             return false;
         }
@@ -693,13 +693,13 @@ bool himax_sense_off(void)
         tmp_data[2] = 0x00;
         tmp_data[1] = 0x00;
         tmp_data[0] = 0x00;
-        himax_flash_write_burst(tmp_addr, tmp_data);
+        hx83112f_flash_write_burst(tmp_addr, tmp_data);
 
         tmp_addr[3] = 0x90;
         tmp_addr[2] = 0x00;
         tmp_addr[1] = 0x00;
         tmp_addr[0] = 0xA8;
-        himax_register_read(tmp_addr, 4, tmp_data, false);
+        hx83112f_register_read(tmp_addr, 4, tmp_data, false);
         TPD_INFO("%s: 0x900000A8, tmp_data[0]=%x, tmp_data[1]=%x, tmp_data[2]=%x, tmp_data[3]=%x \n",
                  __func__, tmp_data[0], tmp_data[1], tmp_data[2], tmp_data[3]);
     }
@@ -707,14 +707,14 @@ bool himax_sense_off(void)
     return false;
 }
 
-void himax_interface_on(void)
+void hx83112f_interface_on(void)
 {
     uint8_t tmp_data[5];
     uint8_t tmp_data2[2];
     int cnt = 0;
 
     /* Read a dummy register to wake up I2C. */
-    if (himax_bus_read(0x08, 4, tmp_data) < 0) { /* to knock I2C */
+    if (hx83112f_bus_read(0x08, 4, tmp_data) < 0) { /* to knock I2C */
         TPD_INFO("%s: spi bus access fail!\n", __func__);
         return;
     }
@@ -722,20 +722,20 @@ void himax_interface_on(void)
     do {
         /* Enable continuous burst mode : 0x13 ==> 0x31 */
         tmp_data[0] = 0x31;
-        if (himax_bus_write(0x13, 1, tmp_data) < 0) {
+        if (hx83112f_bus_write(0x13, 1, tmp_data) < 0) {
             TPD_INFO("%s: spi bus access fail!\n", __func__);
             return;
         }
         /* Do not AHB address auto +4 : 0x0D ==> 0x10 */
         tmp_data[0] = (0x10);
-        if (himax_bus_write(0x0D, 1, tmp_data) < 0) {
+        if (hx83112f_bus_write(0x0D, 1, tmp_data) < 0) {
             TPD_INFO("%s: spi bus access fail!\n", __func__);
             return;
         }
 
         /* Check cmd */
-        himax_bus_read(0x13, 1, tmp_data);
-        himax_bus_read(0x0D, 1, tmp_data2);
+        hx83112f_bus_read(0x13, 1, tmp_data);
+        hx83112f_bus_read(0x0D, 1, tmp_data2);
 
         if (tmp_data[0] == 0x31 && tmp_data2[0] == 0x10) {
             break;
@@ -748,14 +748,14 @@ void himax_interface_on(void)
     }
 }
 
-void himax_diag_register_set(uint8_t diag_command)
+void hx83112f_diag_register_set(uint8_t diag_command)
 {
     uint8_t tmp_addr[4];
     uint8_t tmp_data[4];
 
     TPD_INFO("diag_command = %d\n", diag_command );
 
-    himax_interface_on();
+    hx83112f_interface_on();
 
     tmp_addr[3] = 0x10;
     tmp_addr[2] = 0x00;
@@ -766,9 +766,9 @@ void himax_diag_register_set(uint8_t diag_command)
     tmp_data[2] = 0x00;
     tmp_data[1] = 0x00;
     tmp_data[0] = diag_command;
-    himax_flash_write_burst(tmp_addr, tmp_data);
+    hx83112f_flash_write_burst(tmp_addr, tmp_data);
 
-    himax_register_read(tmp_addr, 4, tmp_data, false);
+    hx83112f_register_read(tmp_addr, 4, tmp_data, false);
     TPD_INFO("%s: tmp_data[3] = 0x%02X, tmp_data[2] = 0x%02X, tmp_data[1] = 0x%02X, tmp_data[0] = 0x%02X!\n",
              __func__, tmp_data[3], tmp_data[2], tmp_data[1], tmp_data[0]);
 }
@@ -789,16 +789,16 @@ static void himax_hx83112f_reload_to_active(void)
         data[2] = 0x00;
         data[1] = 0x00;
         data[0] = 0xEC;
-        himax_register_write(addr, 4, data, 0);
+        hx83112f_register_write(addr, 4, data, 0);
         msleep(1);
-        himax_register_read(addr, 4, data, 0);
+        hx83112f_register_read(addr, 4, data, 0);
         TPD_INFO("%s: data[1]=%d, data[0]=%d, retry_cnt=%d\n", __func__, data[1], data[0], retry_cnt);
         retry_cnt++;
     } while ((data[1] != 0x01 || data[0] != 0xEC)
              && retry_cnt < HIMAX_REG_RETRY_TIMES);
 }
 
-void himax_sense_on(uint8_t FlashMode)
+void hx83112f_sense_on(uint8_t FlashMode)
 {
     uint8_t tmp_addr[4];
     uint8_t tmp_data[4];
@@ -806,7 +806,7 @@ void himax_sense_on(uint8_t FlashMode)
 
     TPD_DETAIL("Enter %s  \n", __func__);
 
-    himax_interface_on();
+    hx83112f_interface_on();
     tmp_addr[3] = 0x90;
     tmp_addr[2] = 0x00;
     tmp_addr[1] = 0x00;
@@ -815,10 +815,10 @@ void himax_sense_on(uint8_t FlashMode)
     tmp_data[2] = 0x00;
     tmp_data[1] = 0x00;
     tmp_data[0] = 0x00;
-    himax_flash_write_burst(tmp_addr, tmp_data);
+    hx83112f_flash_write_burst(tmp_addr, tmp_data);
 
     if (!FlashMode) {
-        himax_mcu_sys_reset();
+        hx83112f_mcu_sys_reset();
         himax_hx83112f_reload_to_active();
     } else {
         himax_hx83112f_reload_to_active();
@@ -831,28 +831,28 @@ void himax_sense_on(uint8_t FlashMode)
             tmp_data[2] = 0x00;
             tmp_data[1] = 0x00;
             tmp_data[0] = 0x53;
-            himax_register_write(tmp_addr, 4, tmp_data, false);
+            hx83112f_register_write(tmp_addr, 4, tmp_data, false);
 
             tmp_addr[0] = 0xE4;
-            himax_register_read(tmp_addr, 4, tmp_data, false);
+            hx83112f_register_read(tmp_addr, 4, tmp_data, false);
 
             TPD_DETAIL("%s:Read status from IC = %X, %X\n", __func__, tmp_data[0], tmp_data[1]);
         } while ((tmp_data[1] != 0x01 || tmp_data[0] != 0x00) && retry++ < 5);
 
         if (retry >= 5) {
             TPD_INFO("%s: Fail:\n", __func__);
-            himax_mcu_sys_reset();
-            himax_register_write(tmp_addr, 4, tmp_data, false);
+            hx83112f_mcu_sys_reset();
+            hx83112f_register_write(tmp_addr, 4, tmp_data, false);
             himax_hx83112f_reload_to_active();
         } else {
             TPD_DETAIL("%s:OK and Read status from IC = %X, %X\n", __func__, tmp_data[0], tmp_data[1]);
 
             /* reset code*/
             tmp_data[0] = 0x00;
-            if (himax_bus_write(0x31, 1, tmp_data) < 0) {
+            if (hx83112f_bus_write(0x31, 1, tmp_data) < 0) {
                 TPD_INFO("%s: spi bus access fail!\n", __func__);
             }
-            if (himax_bus_write(0x32, 1, tmp_data) < 0) {
+            if (hx83112f_bus_write(0x32, 1, tmp_data) < 0) {
                 TPD_INFO("%s: spi bus access fail!\n", __func__);
             }
 
@@ -864,7 +864,7 @@ void himax_sense_on(uint8_t FlashMode)
             tmp_data[2] = 0x00;
             tmp_data[1] = 0x00;
             tmp_data[0] = 0x00;
-            himax_register_write(tmp_addr, 4, tmp_data, false);
+            hx83112f_register_write(tmp_addr, 4, tmp_data, false);
         }
     }
 }
@@ -877,28 +877,24 @@ void himax_sense_on(uint8_t FlashMode)
  */
 static int hx83112f_enable_interrupt(struct chip_data_hx83112f *chip_info, bool enable)
 {
-
-
-    if (enable == true && irq_en_cnt == 0) {
-        enable_irq(chip_info->hx_irq);
-        irq_en_cnt = 1;
-        TPD_DETAIL("%s enter, enable irq=%d.\n", __func__, chip_info->hx_irq);
-    } else if (enable == false && irq_en_cnt == 1) {
-        disable_irq_nosync(chip_info->hx_irq);
-        //disable_irq(chip_info->hx_irq);
-        irq_en_cnt = 0;
-        TPD_DETAIL("%s enter, disable irq=%d.\n", __func__, chip_info->hx_irq);
+    if (enable == true && hx83112f_irq_en_cnt == 0) {
+        enable_irq(hx83112f_private_ts->irq);
+        hx83112f_irq_en_cnt = 1;
+        TPD_DETAIL("%s enter, enable irq=%d.\n", __func__, hx83112f_private_ts->irq);
+    } else if (enable == false && hx83112f_irq_en_cnt == 1) {
+        disable_irq_nosync(hx83112f_private_ts->irq);
+        hx83112f_irq_en_cnt = 0;
+        TPD_DETAIL("%s enter, disable irq=%d.\n", __func__, hx83112f_private_ts->irq);
     } else {
-        TPD_DETAIL("irq is not pairing! enable= %d, cnt = %d\n", enable, irq_en_cnt);
+        TPD_DETAIL("irq is not pairing! enable= %d, cnt = %d\n", enable, hx83112f_irq_en_cnt);
     }
-
 
     return 0;
 }
 
-struct zf_operation *pzf_op = NULL;
+static struct zf_operation *pzf_op = NULL;
 
-void himax_in_parse_assign_cmd(uint32_t addr, uint8_t *cmd, int len)
+void hx83112f_in_parse_assign_cmd(uint32_t addr, uint8_t *cmd, int len)
 {
     switch (len) {
     case 1:
@@ -919,7 +915,7 @@ void himax_in_parse_assign_cmd(uint32_t addr, uint8_t *cmd, int len)
     }
 }
 
-int hx_dis_rload_0f()
+int hx83112f_hx_dis_rload_0f(void)
 {
     /* Diable Flash Reload */
     int retry = 10;
@@ -931,8 +927,8 @@ int hx_dis_rload_0f()
     TPD_DETAIL("%s: Entering !\n", __func__);
 
     do {
-        himax_flash_write_burst(pzf_op->addr_dis_flash_reload,  pzf_op->data_dis_flash_reload);
-        himax_register_read(pzf_op->addr_dis_flash_reload, 4, tmp_data, false);
+        hx83112f_flash_write_burst(pzf_op->addr_dis_flash_reload,  pzf_op->data_dis_flash_reload);
+        hx83112f_register_read(pzf_op->addr_dis_flash_reload, 4, tmp_data, false);
         TPD_DETAIL("Now data: tmp_data[3] = 0x%02X || tmp_data[2] = 0x%02X || tmp_data[1] = 0x%02X || tmp_data[0] = 0x%02X\n", tmp_data[3], tmp_data[2], tmp_data[1], tmp_data[0]);
         if( tmp_data[3] != 0x00 || tmp_data[2] != 0x00 || tmp_data[1] != 0x9A || tmp_data[0] != 0xA9) {
             TPD_INFO("Not Same,Write Fail, there is %d retry times!\n", retry);
@@ -945,8 +941,8 @@ int hx_dis_rload_0f()
     } while(check_val == 1 && retry-- > 0);
 
     /* 100072c0 clear 00 */
-    himax_flash_write_burst(addr, data);
-    himax_register_read(addr, 4, tmp_data, false);
+    hx83112f_flash_write_burst(addr, data);
+    hx83112f_register_read(addr, 4, tmp_data, false);
     TPD_DETAIL("tmp_data[3]=0x%02X,tmp_data[2]=0x%02X,tmp_data[1]=0x%02X,tmp_data[0]=0x%02X\n",
                tmp_data[3], tmp_data[2], tmp_data[1], tmp_data[0]);
     if( tmp_data[3] != 0x00 || tmp_data[2] != 0x00 || tmp_data[1] != 0x00 || tmp_data[0] != 0x00) {
@@ -958,7 +954,7 @@ int hx_dis_rload_0f()
     return check_val;
 }
 
-void himax_mcu_write_sram_0f(const struct firmware *fw_entry, uint8_t *addr, int start_index, uint32_t write_len)
+static void hx83112f_mcu_write_sram_0f(const struct firmware *fw_entry, uint8_t *addr, int start_index, uint32_t write_len)
 {
     int total_read_times = 0;
     int max_bus_size = MAX_TRANS_SZ;
@@ -989,7 +985,7 @@ void himax_mcu_write_sram_0f(const struct firmware *fw_entry, uint8_t *addr, int
         max_bus_size = write_len;
     }
 #endif
-    himax_burst_enable(1);
+    hx83112f_burst_enable(1);
 
     tmp_addr[3] = addr[3];
     tmp_addr[2] = addr[2];
@@ -1001,16 +997,16 @@ void himax_mcu_write_sram_0f(const struct firmware *fw_entry, uint8_t *addr, int
 
     TPD_DETAIL("%s,  total size=%d\n", __func__, total_size);
 
-    if (g_chip_info->tmp_data == NULL) {
-        //TPD_INFO("%s,  enteralloc g_chip_info->tmp_data\n", __func__);
-        g_chip_info->tmp_data = kzalloc (sizeof (uint8_t) * firmware_update_space, GFP_KERNEL);
-        if (g_chip_info->tmp_data == NULL) {
-            TPD_INFO("%s, alloc g_chip_info->tmp_data failed\n", __func__);
+    if (hx83112f_g_chip_info->tmp_data == NULL) {
+        //TPD_INFO("%s,  enteralloc hx83112f_g_chip_info->tmp_data\n", __func__);
+        hx83112f_g_chip_info->tmp_data = kzalloc (sizeof (uint8_t) * firmware_update_space, GFP_KERNEL);
+        if (hx83112f_g_chip_info->tmp_data == NULL) {
+            TPD_INFO("%s, alloc hx83112f_g_chip_info->tmp_data failed\n", __func__);
             return ;
         }
-        //TPD_INFO("%s, end---------alloc g_chip_info->tmp_data\n", __func__);
+        //TPD_INFO("%s, end---------alloc hx83112f_g_chip_info->tmp_data\n", __func__);
     }
-    memcpy (g_chip_info->tmp_data, fw_entry->data, total_size);
+    memcpy (hx83112f_g_chip_info->tmp_data, fw_entry->data, total_size);
     /*
     for (i = 0;i < 10;i++) {
         TPD_INFO("[%d] 0x%2.2X", i, tmp_data[i]);
@@ -1029,11 +1025,11 @@ void himax_mcu_write_sram_0f(const struct firmware *fw_entry, uint8_t *addr, int
         TPD_INFO("[log]addr[3] = 0x%02X, addr[2] = 0x%02X, addr[1] = 0x%02X, addr[0] = 0x%02X!\n", tmp_addr[3], tmp_addr[2], tmp_addr[1], tmp_addr[0]);
         */
         if (total_size_temp >= max_bus_size) {
-            himax_flash_write_burst_length(tmp_addr, &(g_chip_info->tmp_data[start_index + i * max_bus_size]),  max_bus_size);
+            hx83112f_flash_write_burst_length(tmp_addr, &(hx83112f_g_chip_info->tmp_data[start_index + i * max_bus_size]),  max_bus_size);
             total_size_temp = total_size_temp - max_bus_size;
         } else {
             TPD_DETAIL("last total_size_temp=%d\n", total_size_temp);
-            himax_flash_write_burst_length(tmp_addr, &(g_chip_info->tmp_data[start_index + i * max_bus_size]),  total_size_temp % max_bus_size);
+            hx83112f_flash_write_burst_length(tmp_addr, &(hx83112f_g_chip_info->tmp_data[start_index + i * max_bus_size]),  total_size_temp % max_bus_size);
         }
 
         /*TPD_INFO("[log]write %d time end!\n", i);*/
@@ -1051,23 +1047,23 @@ void himax_mcu_write_sram_0f(const struct firmware *fw_entry, uint8_t *addr, int
     }
     TPD_DETAIL("%s, ----END \n", __func__);
     //kfree (tmp_data);
-    memset(g_chip_info->tmp_data, 0, total_size);
+    memset(hx83112f_g_chip_info->tmp_data, 0, total_size);
 }
-int himax_sram_write_crc_check(const struct firmware *fw_entry, uint8_t *addr, int strt_idx, uint32_t len)
+int hx83112f_sram_write_crc_check(const struct firmware *fw_entry, uint8_t *addr, int strt_idx, uint32_t len)
 {
     int retry = 0;
     int crc = -1;
 
     do {
-        g_core_fp.fp_write_sram_0f(fw_entry, addr, strt_idx, len);
-        crc = himax_hw_check_CRC (pzf_op->data_sram_start_addr, HX64K);
+        hx83112f_g_core_fp.fp_write_sram_0f(fw_entry, addr, strt_idx, len);
+        crc = hx83112f_hw_check_CRC(pzf_op->data_sram_start_addr, HX64K);
         retry++;
         /*I("%s, HW CRC %s in %d time\n", __func__, (crc == 0)?"OK":"Fail", retry);*/
     } while (crc != 0 && retry < 10);
 
     return crc;
 }
-static int himax_mcu_Calculate_CRC_with_AP(unsigned char *FW_content, int CRC_from_FW, int len)
+int hx83112f_mcu_Calculate_CRC_with_AP(unsigned char *FW_content, int CRC_from_FW, int len)
 {
     int i, j, length = 0;
     int fw_data;
@@ -1100,7 +1096,7 @@ static int himax_mcu_Calculate_CRC_with_AP(unsigned char *FW_content, int CRC_fr
     return CRC;
 }
 
-bool hx_parse_bin_cfg_data(const struct firmware *fw_entry)
+bool hx83112f_hx_parse_bin_cfg_data(const struct firmware *fw_entry)
 {
     bool flag_1k_header = false;
     int part_num = 0;
@@ -1193,7 +1189,7 @@ bool hx_parse_bin_cfg_data(const struct firmware *fw_entry)
     for (i = 1; i < part_num; i++)
         memcpy(hx83112f_nf_FW_buf + (zf_info_arr[i].cfg_addr - dsram_base), (unsigned char *)&fw_entry->data[zf_info_arr[i].fw_addr], zf_info_arr[i].write_size);
 
-    hx83112f_nf_cfg_crc = himax_mcu_Calculate_CRC_with_AP(hx83112f_nf_FW_buf, 0, hx83112f_nf_cfg_sz);
+    hx83112f_nf_cfg_crc = hx83112f_mcu_Calculate_CRC_with_AP(hx83112f_nf_FW_buf, 0, hx83112f_nf_cfg_sz);
     TPD_INFO("chenyunrui:hx83112f_nf_cfg_crc = %d\n", hx83112f_nf_cfg_crc);
     kfree(zf_info_arr);
     return true;
@@ -1208,11 +1204,11 @@ static int hx83112f_nf_zf_part_info(const struct firmware *fw_entry)
     int crc = -1;
     uint8_t tmp_data[4] = {0, 0, 0, 0};
 
-    if (!hx_parse_bin_cfg_data(fw_entry))
+    if (!hx83112f_hx_parse_bin_cfg_data(fw_entry))
         TPD_INFO("%s, Parse cfg from bin failed\n", __func__);
 
-    himax_mcu_sys_reset();
-    himax_sense_off();
+    hx83112f_mcu_sys_reset();
+    hx83112f_sense_off();
     getnstimeofday(&timeStart);
     /* first 64K */
 
@@ -1231,24 +1227,24 @@ static int hx83112f_nf_zf_part_info(const struct firmware *fw_entry)
         flag_1k_header = false;
 
     if (flag_1k_header == true)
-        himax_sram_write_crc_check(fw_entry, pzf_op->data_sram_start_addr, HX1K, HX64K);
+        hx83112f_sram_write_crc_check(fw_entry, pzf_op->data_sram_start_addr, HX1K, HX64K);
     else
-        himax_sram_write_crc_check(fw_entry, pzf_op->data_sram_start_addr, 0, HX64K);
-    crc = himax_hw_check_CRC(pzf_op->data_sram_start_addr, HX64K);
+        hx83112f_sram_write_crc_check(fw_entry, pzf_op->data_sram_start_addr, 0, HX64K);
+    crc = hx83112f_hw_check_CRC(pzf_op->data_sram_start_addr, HX64K);
 
     ret = (crc == 0) ? true : false;
     if (crc != 0)
         TPD_INFO("64K CRC Failed! CRC = %X", crc);
     do {
-        himax_mcu_register_write(hx83112f_nf_sram_min, hx83112f_nf_cfg_sz, hx83112f_nf_FW_buf, 0);
-        /*himax_register_write(hx83112f_nf_sram_min, hx83112f_nf_cfg_sz, hx83112f_nf_FW_buf, 0); */
-        crc = himax_hw_check_CRC(hx83112f_nf_sram_min, hx83112f_nf_cfg_sz);
+        hx83112f_mcu_register_write(hx83112f_nf_sram_min, hx83112f_nf_cfg_sz, hx83112f_nf_FW_buf, 0);
+        /*hx83112f_register_write(hx83112f_nf_sram_min, hx83112f_nf_cfg_sz, hx83112f_nf_FW_buf, 0); */
+        crc = hx83112f_hw_check_CRC(hx83112f_nf_sram_min, hx83112f_nf_cfg_sz);
         if (crc != hx83112f_nf_cfg_crc)
             TPD_INFO("Config CRC FAIL, HW CRC = %X, SW CRC = %X, retry time = %d", crc, hx83112f_nf_cfg_crc, retry);
         retry++;
     } while (!ret && retry < 10);
 
-    himax_register_write(pzf_op->data_mode_switch, 4, tmp_data, false);
+    hx83112f_register_write(pzf_op->data_mode_switch, 4, tmp_data, false);
 
     getnstimeofday(&timeEnd);
     timeDelta.tv_nsec = (timeEnd.tv_sec * 1000000000 + timeEnd.tv_nsec) - (timeStart.tv_sec * 1000000000 + timeStart.tv_nsec);
@@ -1256,7 +1252,7 @@ static int hx83112f_nf_zf_part_info(const struct firmware *fw_entry)
     return 0;
 }
 
-void himax_mcu_firmware_update_0f(const struct firmware *fw_entry)
+void hx83112f_mcu_firmware_update_0f(const struct firmware *fw_entry)
 {
     int retry = 0;
     int crc = -1;
@@ -1267,12 +1263,12 @@ void himax_mcu_firmware_update_0f(const struct firmware *fw_entry)
     const struct firmware *tmp_fw_entry = NULL;
     bool reload = false;
 
-    if(g_f_0f_updat == 1) {
+    if(hx83112f_g_f_0f_updat == 1) {
         TPD_INFO("%s:[Warning]Other thread is updating now!\n", __func__);
         return;
     } else {
         TPD_INFO("%s:Entering Update Flow!\n", __func__);
-        g_f_0f_updat = 1;
+        hx83112f_g_f_0f_updat = 1;
     }
 
     if (fw_entry == NULL || reload) {
@@ -1281,23 +1277,25 @@ void himax_mcu_firmware_update_0f(const struct firmware *fw_entry)
             request_fw_headfile = kzalloc(sizeof(struct firmware), GFP_KERNEL);
         }
         if(request_fw_headfile == NULL) {
+            tp_healthinfo_report(hx83112f_g_chip_info->monitor_data_v2, HEALTH_FW_UPDATE, "FW_HF_KZL_failed");
             TPD_INFO("%s kzalloc failed!\n", __func__);
             goto END;
         }
-        if (g_chip_info->g_fw_sta) {
+        if (hx83112f_g_chip_info->g_fw_sta) {
             TPD_INFO("request firmware failed, get from g_fw_buf\n");
-            request_fw_headfile->size = g_chip_info->g_fw_len;
-            request_fw_headfile->data = g_chip_info->g_fw_buf;
+            request_fw_headfile->size = hx83112f_g_chip_info->g_fw_len;
+            request_fw_headfile->data = hx83112f_g_chip_info->g_fw_buf;
             tmp_fw_entry = request_fw_headfile;
 
         } else {
             TPD_INFO("request firmware failed, get from headfile\n");
-            if(g_chip_info->p_firmware_headfile->firmware_data) {
-                request_fw_headfile->size = g_chip_info->p_firmware_headfile->firmware_size;
-                request_fw_headfile->data = g_chip_info->p_firmware_headfile->firmware_data;
+            if(hx83112f_g_chip_info->p_firmware_headfile->firmware_data) {
+                request_fw_headfile->size = hx83112f_g_chip_info->p_firmware_headfile->firmware_size;
+                request_fw_headfile->data = hx83112f_g_chip_info->p_firmware_headfile->firmware_data;
                 tmp_fw_entry = request_fw_headfile;
-                g_chip_info->using_headfile = true;
+                hx83112f_g_chip_info->using_headfile = true;
             } else {
+                tp_healthinfo_report(hx83112f_g_chip_info->monitor_data_v2, HEALTH_FW_UPDATE, "FW_DT_NL_failed");
                 TPD_INFO("firmware_data is NULL! exit firmware update!\n");
                 if(request_fw_headfile != NULL) {
                     kfree(request_fw_headfile);
@@ -1318,20 +1316,19 @@ void himax_mcu_firmware_update_0f(const struct firmware *fw_entry)
         goto END;
     }
 
-    hx83112f_fw_check(private_ts->chip_data, &private_ts->resolution_info, &private_ts->panel_data);
+    hx83112f_fw_check(hx83112f_private_ts->chip_data, &hx83112f_private_ts->resolution_info, &hx83112f_private_ts->panel_data);
 
+END:
+    hx83112f_g_f_0f_updat = 0;
     if (request_fw_headfile != NULL) {
         kfree(request_fw_headfile);
         request_fw_headfile = NULL;
     }
 
-END:
-    g_f_0f_updat = 0;
-
     TPD_DETAIL("%s, END \n", __func__);
 }
 
-int himax_mcu_0f_operation_test_dirly(char *fw_name)
+int hx83112f_mcu_0f_operation_test_dirly(char *fw_name)
 {
     int err = NO_ERR;
     const struct firmware *fw_entry = NULL;
@@ -1339,7 +1336,7 @@ int himax_mcu_0f_operation_test_dirly(char *fw_name)
     TPD_DETAIL("%s, Entering \n", __func__);
     TPD_DETAIL("file name = %s\n", fw_name);
     TPD_INFO("Request TP firmware.\n");
-    err = request_firmware (&fw_entry, fw_name, private_ts->dev);
+    err = request_firmware (&fw_entry, fw_name, hx83112f_private_ts->dev);
     if (err < 0) {
         TPD_INFO("%s, fail in line%d error code=%d, file maybe fail\n", __func__, __LINE__, err);
         if (fw_entry != NULL) {
@@ -1349,76 +1346,76 @@ int himax_mcu_0f_operation_test_dirly(char *fw_name)
         return err;
     }
 
-    himax_mcu_firmware_update_0f(fw_entry);
+    hx83112f_mcu_firmware_update_0f(fw_entry);
     release_firmware (fw_entry);
 
     TPD_DETAIL("%s, END \n", __func__);
     return err;
 }
 
-void himax_mcu_0f_operation(struct work_struct *work)
+void hx83112f_mcu_0f_operation(struct work_struct *work)
 {
     TPD_INFO("%s, Entering \n", __func__);
 
 #ifdef CONFIG_TOUCHPANEL_MTK_PLATFORM
-    if (private_ts->boot_mode != RECOVERY_BOOT  && !is_oem_unlocked())
+    if (hx83112f_private_ts->boot_mode != RECOVERY_BOOT  && !is_oem_unlocked())
 #else
     /*Himax_DB_Test Start*/
-    if (private_ts->boot_mode != MSM_BOOT_MODE__RECOVERY  && !is_oem_unlocked())
-        //if (private_ts->boot_mode != MSM_BOOT_MODE__RECOVERY)//&& !is_oem_unlocked()
+    if (hx83112f_private_ts->boot_mode != MSM_BOOT_MODE__RECOVERY  && !is_oem_unlocked())
+        //if (hx83112f_private_ts->boot_mode != MSM_BOOT_MODE__RECOVERY)//&& !is_oem_unlocked()
         /*Himax_DB_Test End*/
 #endif
     {
-        TPD_INFO("file name = %s\n", private_ts->panel_data.fw_name);
+        TPD_INFO("file name = %s\n", hx83112f_private_ts->panel_data.fw_name);
 
     } else {
         TPD_INFO("TP firmware has been requested.\n");
     }
 
-    if (g_f_0f_updat == 1) {
+    if (hx83112f_g_f_0f_updat == 1) {
         TPD_INFO("%s:[Warning]Other thread is updating now!\n", __func__);
         return ;
     } else {
         TPD_INFO("%s:Entering Update Flow!\n", __func__);
-        g_f_0f_updat = 1;
+        hx83112f_g_f_0f_updat = 1;
     }
 
-    hx83112f_enable_interrupt(g_chip_info, false);
+    hx83112f_enable_interrupt(hx83112f_g_chip_info, false);
 
     /* trigger reset */
 #ifdef HX_RST_PIN_FUNC
-    hx83112f_resetgpio_set(g_chip_info->hw_res, false);
-    hx83112f_resetgpio_set(g_chip_info->hw_res, true);
+    hx83112f_resetgpio_set(hx83112f_g_chip_info->hw_res, false);
+    hx83112f_resetgpio_set(hx83112f_g_chip_info->hw_res, true);
     //#else
-    //    himax_mcu_sys_reset();
+    //    hx83112f_mcu_sys_reset();
 #endif
-    himax_mcu_firmware_update_0f(NULL);
-    //release_firmware (g_chip_info->g_fw_entry);
+    hx83112f_mcu_firmware_update_0f(NULL);
+    //release_firmware (hx83112f_g_chip_info->g_fw_entry);
 
-    g_core_fp.fp_reload_disable();
+    hx83112f_g_core_fp.fp_reload_disable();
     msleep (10);
-    himax_read_FW_ver();
+    hx83112f_read_FW_ver();
     msleep (10);
-    himax_sense_on(0x00);
+    hx83112f_sense_on(0x00);
     msleep (10);
     TPD_INFO("%s:End \n", __func__);
 
 #ifdef CONFIG_OPLUS_TP_APK
-    if(g_chip_info->debug_mode_sta) {
-        if(private_ts->apk_op && private_ts->apk_op->apk_debug_set) {
-            private_ts->apk_op->apk_debug_set(private_ts->chip_data, true);
+    if(hx83112f_g_chip_info->debug_mode_sta) {
+        if(hx83112f_private_ts->apk_op && hx83112f_private_ts->apk_op->apk_debug_set) {
+            hx83112f_private_ts->apk_op->apk_debug_set(hx83112f_private_ts->chip_data, true);
         }
     }
 #endif // end of CONFIG_OPLUS_TP_APK
 
-    hx83112f_enable_interrupt(g_chip_info, true);
+    hx83112f_enable_interrupt(hx83112f_g_chip_info, true);
 
-    g_f_0f_updat = 0;
+    hx83112f_g_f_0f_updat = 0;
     TPD_INFO("%s, END \n", __func__);
     return ;
 }
 
-int hx_0f_init(void)
+int hx83112f_hx_0f_init(void)
 {
     pzf_op = kzalloc(sizeof(struct zf_operation), GFP_KERNEL);
     if (!pzf_op) {
@@ -1426,30 +1423,30 @@ int hx_0f_init(void)
         return 0;
     }
 
-    g_core_fp.fp_reload_disable = hx_dis_rload_0f;
-    g_core_fp.fp_write_sram_0f = himax_mcu_write_sram_0f;
+    hx83112f_g_core_fp.fp_reload_disable = hx83112f_hx_dis_rload_0f;
+    hx83112f_g_core_fp.fp_write_sram_0f = hx83112f_mcu_write_sram_0f;
 
-    himax_in_parse_assign_cmd(zf_addr_dis_flash_reload, pzf_op->addr_dis_flash_reload, sizeof(pzf_op->addr_dis_flash_reload));
-    himax_in_parse_assign_cmd(zf_data_dis_flash_reload, pzf_op->data_dis_flash_reload, sizeof(pzf_op->data_dis_flash_reload));
-    himax_in_parse_assign_cmd(zf_addr_system_reset, pzf_op->addr_system_reset, sizeof(pzf_op->addr_system_reset));
-    himax_in_parse_assign_cmd(zf_data_system_reset, pzf_op->data_system_reset, sizeof(pzf_op->data_system_reset));
-    himax_in_parse_assign_cmd(zf_data_sram_start_addr, pzf_op->data_sram_start_addr, sizeof(pzf_op->data_sram_start_addr));
-    himax_in_parse_assign_cmd(zf_data_sram_clean, pzf_op->data_sram_clean, sizeof(pzf_op->data_sram_clean));
-    himax_in_parse_assign_cmd(zf_data_cfg_info, pzf_op->data_cfg_info, sizeof(pzf_op->data_cfg_info));
-    himax_in_parse_assign_cmd(zf_data_fw_cfg_p1, pzf_op->data_fw_cfg_p1, sizeof(pzf_op->data_fw_cfg_p1));
-    himax_in_parse_assign_cmd(zf_data_fw_cfg_p2, pzf_op->data_fw_cfg_p2, sizeof(pzf_op->data_fw_cfg_p2));
-    himax_in_parse_assign_cmd(zf_data_fw_cfg_p3, pzf_op->data_fw_cfg_p3, sizeof(pzf_op->data_fw_cfg_p3));
-    himax_in_parse_assign_cmd(zf_data_adc_cfg_1, pzf_op->data_adc_cfg_1, sizeof(pzf_op->data_adc_cfg_1));
-    himax_in_parse_assign_cmd(zf_data_adc_cfg_2, pzf_op->data_adc_cfg_2, sizeof(pzf_op->data_adc_cfg_2));
-    himax_in_parse_assign_cmd(zf_data_adc_cfg_3, pzf_op->data_adc_cfg_3, sizeof(pzf_op->data_adc_cfg_3));
-    himax_in_parse_assign_cmd(zf_data_map_table, pzf_op->data_map_table, sizeof(pzf_op->data_map_table));
-    himax_in_parse_assign_cmd(zf_data_mode_switch, pzf_op->data_mode_switch, sizeof(pzf_op->data_mode_switch));
+    hx83112f_in_parse_assign_cmd(zf_addr_dis_flash_reload, pzf_op->addr_dis_flash_reload, sizeof(pzf_op->addr_dis_flash_reload));
+    hx83112f_in_parse_assign_cmd(zf_data_dis_flash_reload, pzf_op->data_dis_flash_reload, sizeof(pzf_op->data_dis_flash_reload));
+    hx83112f_in_parse_assign_cmd(zf_addr_system_reset, pzf_op->addr_system_reset, sizeof(pzf_op->addr_system_reset));
+    hx83112f_in_parse_assign_cmd(zf_data_system_reset, pzf_op->data_system_reset, sizeof(pzf_op->data_system_reset));
+    hx83112f_in_parse_assign_cmd(zf_data_sram_start_addr, pzf_op->data_sram_start_addr, sizeof(pzf_op->data_sram_start_addr));
+    hx83112f_in_parse_assign_cmd(zf_data_sram_clean, pzf_op->data_sram_clean, sizeof(pzf_op->data_sram_clean));
+    hx83112f_in_parse_assign_cmd(zf_data_cfg_info, pzf_op->data_cfg_info, sizeof(pzf_op->data_cfg_info));
+    hx83112f_in_parse_assign_cmd(zf_data_fw_cfg_p1, pzf_op->data_fw_cfg_p1, sizeof(pzf_op->data_fw_cfg_p1));
+    hx83112f_in_parse_assign_cmd(zf_data_fw_cfg_p2, pzf_op->data_fw_cfg_p2, sizeof(pzf_op->data_fw_cfg_p2));
+    hx83112f_in_parse_assign_cmd(zf_data_fw_cfg_p3, pzf_op->data_fw_cfg_p3, sizeof(pzf_op->data_fw_cfg_p3));
+    hx83112f_in_parse_assign_cmd(zf_data_adc_cfg_1, pzf_op->data_adc_cfg_1, sizeof(pzf_op->data_adc_cfg_1));
+    hx83112f_in_parse_assign_cmd(zf_data_adc_cfg_2, pzf_op->data_adc_cfg_2, sizeof(pzf_op->data_adc_cfg_2));
+    hx83112f_in_parse_assign_cmd(zf_data_adc_cfg_3, pzf_op->data_adc_cfg_3, sizeof(pzf_op->data_adc_cfg_3));
+    hx83112f_in_parse_assign_cmd(zf_data_map_table, pzf_op->data_map_table, sizeof(pzf_op->data_map_table));
+    hx83112f_in_parse_assign_cmd(zf_data_mode_switch, pzf_op->data_mode_switch, sizeof(pzf_op->data_mode_switch));
 
 
     return 0;
 }
 
-bool himax_ic_package_check(void)
+bool hx83112f_ic_package_check(void)
 {
     uint8_t tmp_addr[4];
     uint8_t tmp_data[4];
@@ -1457,15 +1454,15 @@ bool himax_ic_package_check(void)
     int i = 0;
 
 #ifdef HX_RST_PIN_FUNC
-    hx83112f_resetgpio_set(g_chip_info->hw_res, true); // reset gpio
-    hx83112f_resetgpio_set(g_chip_info->hw_res, false); // reset gpio
-    hx83112f_resetgpio_set(g_chip_info->hw_res, true); // reset gpio
+    hx83112f_resetgpio_set(hx83112f_g_chip_info->hw_res, true); // reset gpio
+    hx83112f_resetgpio_set(hx83112f_g_chip_info->hw_res, false); // reset gpio
+    hx83112f_resetgpio_set(hx83112f_g_chip_info->hw_res, true); // reset gpio
 #else
-    himax_mcu_sys_reset();
+    hx83112f_mcu_sys_reset();
 #endif
     msleep(5);
 
-    himax_sense_off();
+    hx83112f_sense_off();
 
     for (i = 0; i < 5; i++) {
         // Product ID
@@ -1474,33 +1471,33 @@ bool himax_ic_package_check(void)
         tmp_addr[2] = 0x00;
         tmp_addr[1] = 0x00;
         tmp_addr[0] = 0xD0;
-        himax_register_read(tmp_addr, 4, tmp_data, false);
+        hx83112f_register_read(tmp_addr, 4, tmp_data, false);
 
         TPD_INFO("%s:Read driver IC ID = %X, %X, %X\n", __func__, tmp_data[3], tmp_data[2], tmp_data[1]);
         if ((tmp_data[3] == 0x83) && (tmp_data[2] == 0x11) && (tmp_data[1] == 0x2f)) {
-            IC_TYPE = HX_83112F_SERIES_PWON;
-            IC_CHECKSUM = HX_TP_BIN_CHECKSUM_CRC;
-            hx_0f_init();
+            HX83112F_IC_TYPE = HX_83112F_SERIES_PWON;
+            HX83112F_IC_CHECKSUM = HX_TP_BIN_CHECKSUM_CRC;
+            hx83112f_hx_0f_init();
             //Himax: Set FW and CFG Flash Address
-            FW_VER_MAJ_FLASH_ADDR   = 49157;  //0x00C005
-            FW_VER_MAJ_FLASH_LENG   = 1;
-            FW_VER_MIN_FLASH_ADDR   = 49158;  //0x00C006
-            FW_VER_MIN_FLASH_LENG   = 1;
-            CFG_VER_MAJ_FLASH_ADDR = 49408;  //0x00C100
-            CFG_VER_MAJ_FLASH_LENG = 1;
-            CFG_VER_MIN_FLASH_ADDR = 49409;  //0x00C101
-            CFG_VER_MIN_FLASH_LENG = 1;
-            CID_VER_MAJ_FLASH_ADDR = 49154;  //0x00C002
-            CID_VER_MAJ_FLASH_LENG = 1;
-            CID_VER_MIN_FLASH_ADDR = 49155;  //0x00C003
-            CID_VER_MIN_FLASH_LENG = 1;
+            HX83112F_FW_VER_MAJ_FLASH_ADDR   = 49157;  //0x00C005
+            HX83112F_FW_VER_MAJ_FLASH_LENG   = 1;
+            HX83112F_FW_VER_MIN_FLASH_ADDR   = 49158;  //0x00C006
+            HX83112F_FW_VER_MIN_FLASH_LENG   = 1;
+            HX83112F_CFG_VER_MAJ_FLASH_ADDR = 49408;  //0x00C100
+            HX83112F_CFG_VER_MAJ_FLASH_LENG = 1;
+            HX83112F_CFG_VER_MIN_FLASH_ADDR = 49409;  //0x00C101
+            HX83112F_CFG_VER_MIN_FLASH_LENG = 1;
+            HX83112F_CID_VER_MAJ_FLASH_ADDR = 49154;  //0x00C002
+            HX83112F_CID_VER_MAJ_FLASH_LENG = 1;
+            HX83112F_CID_VER_MIN_FLASH_ADDR = 49155;  //0x00C003
+            HX83112F_CID_VER_MIN_FLASH_LENG = 1;
             //PANEL_VERSION_ADDR = 49156;  //0x00C004
             //PANEL_VERSION_LENG = 1;
 #ifdef HX_AUTO_UPDATE_FW
-            g_i_FW_VER = i_CTPM_FW[FW_VER_MAJ_FLASH_ADDR] << 8 | i_CTPM_FW[FW_VER_MIN_FLASH_ADDR];
-            g_i_CFG_VER = i_CTPM_FW[CFG_VER_MAJ_FLASH_ADDR] << 8 | i_CTPM_FW[CFG_VER_MIN_FLASH_ADDR];
-            g_i_CID_MAJ = i_CTPM_FW[CID_VER_MAJ_FLASH_ADDR];
-            g_i_CID_MIN = i_CTPM_FW[CID_VER_MIN_FLASH_ADDR];
+            g_i_FW_VER = i_CTPM_FW[HX83112F_FW_VER_MAJ_FLASH_ADDR] << 8 | i_CTPM_FW[HX83112F_FW_VER_MIN_FLASH_ADDR];
+            g_i_CFG_VER = i_CTPM_FW[HX83112F_CFG_VER_MAJ_FLASH_ADDR] << 8 | i_CTPM_FW[HX83112F_CFG_VER_MIN_FLASH_ADDR];
+            g_i_CID_MAJ = i_CTPM_FW[HX83112F_CID_VER_MAJ_FLASH_ADDR];
+            g_i_CID_MIN = i_CTPM_FW[HX83112F_CID_VER_MIN_FLASH_ADDR];
 #endif
             TPD_INFO("Himax IC package 83112_in\n");
             ret_data = true;
@@ -1515,7 +1512,7 @@ bool himax_ic_package_check(void)
 }
 
 
-void himax_power_on_init(void)
+void hx83112f_power_on_init(void)
 {
     uint8_t tmp_addr[4];
     uint8_t tmp_data[4];
@@ -1538,7 +1535,7 @@ void himax_power_on_init(void)
     tmp_data[2] = 0x00;
     tmp_data[1] = 0x00;
     tmp_data[0] = 0x00;
-    himax_register_write(tmp_addr, 4, tmp_data, false);
+    hx83112f_register_write(tmp_addr, 4, tmp_data, false);
 
     /*DSRAM func initial*/
     tmp_addr[3] = 0x10;
@@ -1549,12 +1546,12 @@ void himax_power_on_init(void)
     tmp_data[2] = 0x00;
     tmp_data[1] = 0x00;
     tmp_data[0] = 0x00;
-    himax_register_write(tmp_addr, 4, tmp_data, false);
+    hx83112f_register_write(tmp_addr, 4, tmp_data, false);
 
-    himax_sense_on(0x00);
+    hx83112f_sense_on(0x00);
 }
 
-int himax_check_remapping()
+int hx83112f_check_remapping()
 {
     uint8_t cmd[4];
     uint8_t data[64];
@@ -1567,13 +1564,13 @@ int himax_check_remapping()
         cmd[2] = 0x00;
         cmd[1] = 0x7f;
         cmd[0] = 0x00;
-        himax_register_read(cmd, 4, data, false);
+        hx83112f_register_read(cmd, 4, data, false);
 
         cmd[3] = 0x10;
         cmd[2] = 0x00;
         cmd[1] = 0x72;
         cmd[0] = 0xc0;
-        himax_register_read(cmd, 4, data2, false);
+        hx83112f_register_read(cmd, 4, data2, false);
 
         if ((data[2] == 0x9A && data[3] == 0xA9) || (data2[1] == 0x72 && data2[0] == 0xc0)) {
             TPD_INFO("reload OK! \n");
@@ -1593,7 +1590,7 @@ int himax_check_remapping()
     return reload_status;
 }
 
-static void himax_read_FW_ver()
+static void hx83112f_read_FW_ver()
 {
     uint8_t cmd[4];
     uint8_t data[64];
@@ -1601,19 +1598,19 @@ static void himax_read_FW_ver()
     int retry = 200;
     int reload_status = 0;
 
-    himax_sense_on(0);
+    hx83112f_sense_on(0);
 
-    if (himax_check_remapping())
+    if (hx83112f_check_remapping())
         return;
 
-    himax_sense_off();
+    hx83112f_sense_off();
 
     /* Read FW version : 0x1000_7004  but 05,06 are the real addr for FW Version */
     cmd[3] = 0x10;
     cmd[2] = 0x00;
     cmd[1] = 0x70;
     cmd[0] = 0x04;
-    himax_register_read(cmd, 4, data, false);
+    hx83112f_register_read(cmd, 4, data, false);
 
 
     TPD_INFO("PANEL_VER : %X \n", data[0]);
@@ -1623,16 +1620,16 @@ static void himax_read_FW_ver()
     cmd[2] = 0x00;
     cmd[1] = 0x70;
     cmd[0] = 0x14;
-    himax_register_read(cmd, 4, data, false);
-    g_chip_info->fw_id = data[0] << 24 | data[1] << 16 | data[2] << 8 | data[3];
+    hx83112f_register_read(cmd, 4, data, false);
+    hx83112f_g_chip_info->fw_id = data[0] << 24 | data[1] << 16 | data[2] << 8 | data[3];
     TPD_INFO("%s : data[0] = 0x%2.2X, data[1] = 0x%2.2X, data[2] = 0x%2.2X, data[3] = 0x%2.2X\n", __func__, data[0], data[1], data[2], data[3]);
 
     cmd[3] = 0x10;
     cmd[2] = 0x00;
     cmd[1] = 0x70;
     cmd[0] = 0x84;
-    himax_register_read(cmd, 4, data, false);
-    g_chip_info->touch_ver = data[2];
+    hx83112f_register_read(cmd, 4, data, false);
+    hx83112f_g_chip_info->touch_ver = data[2];
     TPD_INFO("CFG_VER : %X \n", data[2] << 8 | data[3]);
     TPD_INFO("TOUCH_VER : %X \n", data[2]);
     TPD_INFO("DISPLAY_VER : %X \n", data[3]);
@@ -1641,23 +1638,25 @@ static void himax_read_FW_ver()
     cmd[2] = 0x00;
     cmd[1] = 0x70;
     cmd[0] = 0x00;
-    himax_register_read(cmd, 4, data, false);
-    g_chip_info->fw_ver = data[2] << 8 | data[3];
+    hx83112f_register_read(cmd, 4, data, false);
+    hx83112f_g_chip_info->fw_ver = data[2] << 8 | data[3];
     TPD_INFO("CID_VER : %X \n", ( data[2] << 8 | data[3]) );
     return;
 }
 
-void himax_read_OPLUS_FW_ver(struct chip_data_hx83112f *chip_info)
+void hx83112f_read_OPLUS_FW_ver(struct chip_data_hx83112f *chip_info)
 {
     uint8_t cmd[4];
     uint8_t data[4];
     // uint32_t touch_ver = 0;
+	u8 ver_len = 0;
+	char dev_version[MAX_DEVICE_VERSION_LENGTH] = {0};
 
     cmd[3] = 0x10;  // oplus fw id bin address : 0xc014    Tp ic address : 0x 10007014
     cmd[2] = 0x00;
     cmd[1] = 0x70;
     cmd[0] = 0x14;
-    himax_register_read(cmd, 4, data, false);
+    hx83112f_register_read(cmd, 4, data, false);
 
     chip_info->fw_id = data[0] << 24 | data[1] << 16 | data[2] << 8 | data[3];
     TPD_INFO("%s : data[0] = 0x%2.2X, data[1] = 0x%2.2X, data[2] = 0x%2.2X, data[3] = 0x%2.2X\n", __func__, data[0], data[1], data[2], data[3]);
@@ -1666,21 +1665,36 @@ void himax_read_OPLUS_FW_ver(struct chip_data_hx83112f *chip_info)
     cmd[2] = 0x00;
     cmd[1] = 0x70;
     cmd[0] = 0x84;
-    himax_register_read(cmd, 4, data, false);
+    hx83112f_register_read(cmd, 4, data, false);
     chip_info->touch_ver = data[0] << 24 | data[1] << 16 | data[2] << 8 | data[3];
     TPD_INFO("%s :touch_ver = 0x%08X\n", __func__, chip_info->touch_ver);
+
+	snprintf(dev_version, MAX_DEVICE_VERSION_LENGTH, "%02X", data[2]);
+	if (hx83112f_private_ts->panel_data.manufacture_info.version) {
+		if (hx83112f_private_ts->panel_data.vid_len == 0) {
+			strlcpy(&(hx83112f_private_ts->panel_data.manufacture_info.version[12]), dev_version, 3);
+		} else {
+			ver_len = hx83112f_private_ts->panel_data.vid_len;
+			if (ver_len > MAX_DEVICE_VERSION_LENGTH - 4) {
+				ver_len = MAX_DEVICE_VERSION_LENGTH - 4;
+			}
+			strlcpy(&hx83112f_private_ts->panel_data.manufacture_info.version[ver_len],
+				dev_version, MAX_DEVICE_VERSION_LENGTH - ver_len);
+		}
+	}
+	TPD_INFO("manufacture_info.version: %s\n", hx83112f_private_ts->panel_data.manufacture_info.version);
 
     cmd[3] = 0x10;
     cmd[2] = 0x00;
     cmd[1] = 0x70;
     cmd[0] = 0x00;
-    himax_register_read(cmd, 4, data, false);
+    hx83112f_register_read(cmd, 4, data, false);
     chip_info->fw_ver = data[2] << 8 | data[3];
     TPD_INFO("%s :fw_Ver = 0x%04X \n", __func__, chip_info->fw_ver);
     return;
 }
 
-uint32_t himax_hw_check_CRC(uint8_t *start_addr, int reload_length)
+static uint32_t hx83112f_hw_check_CRC(uint8_t *start_addr, int reload_length)
 {
     uint32_t result = 0;
     uint8_t tmp_addr[4];
@@ -1694,7 +1708,7 @@ uint32_t himax_hw_check_CRC(uint8_t *start_addr, int reload_length)
     tmp_addr[1] = 0x00;
     tmp_addr[0] = 0x20;
     //tmp_data[3] = 0x00; tmp_data[2] = 0x00; tmp_data[1] = 0xFB; tmp_data[0] = 0x00;
-    himax_flash_write_burst(tmp_addr, start_addr);
+    hx83112f_flash_write_burst(tmp_addr, start_addr);
 
     tmp_addr[3] = 0x80;
     tmp_addr[2] = 0x05;
@@ -1704,7 +1718,7 @@ uint32_t himax_hw_check_CRC(uint8_t *start_addr, int reload_length)
     tmp_data[2] = 0x99;
     tmp_data[1] = (length >> 8);
     tmp_data[0] = length;
-    himax_flash_write_burst(tmp_addr, tmp_data);
+    hx83112f_flash_write_burst(tmp_addr, tmp_data);
 
     cnt = 0;
     tmp_addr[3] = 0x80;
@@ -1712,14 +1726,14 @@ uint32_t himax_hw_check_CRC(uint8_t *start_addr, int reload_length)
     tmp_addr[1] = 0x00;
     tmp_addr[0] = 0x00;
     do {
-        himax_register_read(tmp_addr, 4, tmp_data, false);
+        hx83112f_register_read(tmp_addr, 4, tmp_data, false);
 
         if ((tmp_data[0] & 0x01) != 0x01) {
             tmp_addr[3] = 0x80;
             tmp_addr[2] = 0x05;
             tmp_addr[1] = 0x00;
             tmp_addr[0] = 0x18;
-            himax_register_read(tmp_addr, 4, tmp_data, false);
+            hx83112f_register_read(tmp_addr, 4, tmp_data, false);
             TPD_DETAIL("%s: tmp_data[3]=%X, tmp_data[2]=%X, tmp_data[1]=%X, tmp_data[0]=%X  \n", __func__, tmp_data[3], tmp_data[2], tmp_data[1], tmp_data[0]);
             result = ((tmp_data[3] << 24) + (tmp_data[2] << 16) + (tmp_data[1] << 8) + tmp_data[0]);
             break;
@@ -1729,7 +1743,7 @@ uint32_t himax_hw_check_CRC(uint8_t *start_addr, int reload_length)
     return result;
 }
 
-int cal_data_len(int raw_cnt_rmd, int HX_MAX_PT, int raw_cnt_max)
+int hx83112f_cal_data_len(int raw_cnt_rmd, int HX_MAX_PT, int raw_cnt_max)
 {
     int RawDataLen;
     if (raw_cnt_rmd != 0x00) {
@@ -1741,69 +1755,69 @@ int cal_data_len(int raw_cnt_rmd, int HX_MAX_PT, int raw_cnt_max)
 }
 
 
-int himax_report_data_init(int max_touch_point, int tx_num, int rx_num)
+int hx83112f_report_data_init(int max_touch_point, int tx_num, int rx_num)
 {
-    if (hx_touch_data->hx_coord_buf != NULL) {
-        kfree(hx_touch_data->hx_coord_buf);
+    if (hx83112f_hx_touch_data->hx_coord_buf != NULL) {
+        kfree(hx83112f_hx_touch_data->hx_coord_buf);
     }
 
-    if (hx_touch_data->diag_mutual != NULL) {
-        kfree(hx_touch_data->diag_mutual);
+    if (hx83112f_hx_touch_data->diag_mutual != NULL) {
+        kfree(hx83112f_hx_touch_data->diag_mutual);
     }
 
     //#if defined(HX_SMART_WAKEUP)
-    hx_touch_data->event_size = 128;
+    hx83112f_hx_touch_data->event_size = 128;
     //#endif*/
 
-    hx_touch_data->touch_all_size = 128; //himax_get_touch_data_size();
+    hx83112f_hx_touch_data->touch_all_size = 128; //himax_get_touch_data_size();
 
-    HX_TOUCH_INFO_POINT_CNT = max_touch_point * 4 ;
+    HX83112F_HX_TOUCH_INFO_POINT_CNT = max_touch_point * 4 ;
 
     if ((max_touch_point % 4) == 0)
-        HX_TOUCH_INFO_POINT_CNT += (max_touch_point / 4) * 4 ;
+        HX83112F_HX_TOUCH_INFO_POINT_CNT += (max_touch_point / 4) * 4 ;
     else
-        HX_TOUCH_INFO_POINT_CNT += ((max_touch_point / 4) + 1) * 4 ;
+        HX83112F_HX_TOUCH_INFO_POINT_CNT += ((max_touch_point / 4) + 1) * 4 ;
 
-    hx_touch_data->raw_cnt_max = max_touch_point / 4;
-    hx_touch_data->raw_cnt_rmd = max_touch_point % 4;
+    hx83112f_hx_touch_data->raw_cnt_max = max_touch_point / 4;
+    hx83112f_hx_touch_data->raw_cnt_rmd = max_touch_point % 4;
 
-    if (hx_touch_data->raw_cnt_rmd != 0x00) {//more than 4 fingers
-        hx_touch_data->rawdata_size = cal_data_len(hx_touch_data->raw_cnt_rmd, max_touch_point, hx_touch_data->raw_cnt_max);
-        hx_touch_data->touch_info_size = (max_touch_point + hx_touch_data->raw_cnt_max + 2) * 4;
+    if (hx83112f_hx_touch_data->raw_cnt_rmd != 0x00) {//more than 4 fingers
+        hx83112f_hx_touch_data->rawdata_size = hx83112f_cal_data_len(hx83112f_hx_touch_data->raw_cnt_rmd, max_touch_point, hx83112f_hx_touch_data->raw_cnt_max);
+        hx83112f_hx_touch_data->touch_info_size = (max_touch_point + hx83112f_hx_touch_data->raw_cnt_max + 2) * 4;
     } else {//less than 4 fingers
-        hx_touch_data->rawdata_size = cal_data_len(hx_touch_data->raw_cnt_rmd, max_touch_point, hx_touch_data->raw_cnt_max);
-        hx_touch_data->touch_info_size = (max_touch_point + hx_touch_data->raw_cnt_max + 1) * 4;
+        hx83112f_hx_touch_data->rawdata_size = hx83112f_cal_data_len(hx83112f_hx_touch_data->raw_cnt_rmd, max_touch_point, hx83112f_hx_touch_data->raw_cnt_max);
+        hx83112f_hx_touch_data->touch_info_size = (max_touch_point + hx83112f_hx_touch_data->raw_cnt_max + 1) * 4;
     }
 
-    if ((tx_num * rx_num + tx_num + rx_num) % hx_touch_data->rawdata_size == 0) {
-        hx_touch_data->rawdata_frame_size = (tx_num * rx_num + tx_num + rx_num) / hx_touch_data->rawdata_size;
+    if ((tx_num * rx_num + tx_num + rx_num) % hx83112f_hx_touch_data->rawdata_size == 0) {
+        hx83112f_hx_touch_data->rawdata_frame_size = (tx_num * rx_num + tx_num + rx_num) / hx83112f_hx_touch_data->rawdata_size;
     } else {
-        hx_touch_data->rawdata_frame_size = (tx_num * rx_num + tx_num + rx_num) / hx_touch_data->rawdata_size + 1;
+        hx83112f_hx_touch_data->rawdata_frame_size = (tx_num * rx_num + tx_num + rx_num) / hx83112f_hx_touch_data->rawdata_size + 1;
     }
-    TPD_INFO("%s: rawdata_frame_size = %d ", __func__, hx_touch_data->rawdata_frame_size);
-    TPD_INFO("%s: max_touch_point:%d, hx_raw_cnt_max:%d, hx_raw_cnt_rmd:%d, g_hx_rawdata_size:%d, hx_touch_data->touch_info_size:%d\n",
-             __func__, max_touch_point, hx_touch_data->raw_cnt_max, hx_touch_data->raw_cnt_rmd, hx_touch_data->rawdata_size, hx_touch_data->touch_info_size);
+    TPD_INFO("%s: rawdata_frame_size = %d ", __func__, hx83112f_hx_touch_data->rawdata_frame_size);
+    TPD_INFO("%s: max_touch_point:%d, hx_raw_cnt_max:%d, hx_raw_cnt_rmd:%d, g_hx_rawdata_size:%d, hx83112f_hx_touch_data->touch_info_size:%d\n",
+             __func__, max_touch_point, hx83112f_hx_touch_data->raw_cnt_max, hx83112f_hx_touch_data->raw_cnt_rmd, hx83112f_hx_touch_data->rawdata_size, hx83112f_hx_touch_data->touch_info_size);
 
-    hx_touch_data->hx_coord_buf = kzalloc(sizeof(uint8_t) * (hx_touch_data->touch_info_size), GFP_KERNEL);
-    if (hx_touch_data->hx_coord_buf == NULL) {
+    hx83112f_hx_touch_data->hx_coord_buf = kzalloc(sizeof(uint8_t) * (hx83112f_hx_touch_data->touch_info_size), GFP_KERNEL);
+    if (hx83112f_hx_touch_data->hx_coord_buf == NULL) {
         goto mem_alloc_fail;
     }
 
-    hx_touch_data->diag_mutual = kzalloc(tx_num * rx_num * sizeof(int32_t), GFP_KERNEL);
-    if (hx_touch_data->diag_mutual == NULL) {
+    hx83112f_hx_touch_data->diag_mutual = kzalloc(tx_num * rx_num * sizeof(int32_t), GFP_KERNEL);
+    if (hx83112f_hx_touch_data->diag_mutual == NULL) {
         goto mem_alloc_fail;
     }
 
     //#ifdef HX_TP_PROC_DIAG
-    hx_touch_data->hx_rawdata_buf = kzalloc(sizeof(uint8_t) * (hx_touch_data->touch_all_size - hx_touch_data->touch_info_size), GFP_KERNEL);
-    if (hx_touch_data->hx_rawdata_buf == NULL) {
+    hx83112f_hx_touch_data->hx_rawdata_buf = kzalloc(sizeof(uint8_t) * (hx83112f_hx_touch_data->touch_all_size - hx83112f_hx_touch_data->touch_info_size), GFP_KERNEL);
+    if (hx83112f_hx_touch_data->hx_rawdata_buf == NULL) {
         goto mem_alloc_fail;
     }
     //#endif
 
     //#if defined(HX_SMART_WAKEUP)
-    hx_touch_data->hx_event_buf = kzalloc(sizeof(uint8_t) * (hx_touch_data->event_size), GFP_KERNEL);
-    if (hx_touch_data->hx_event_buf == NULL) {
+    hx83112f_hx_touch_data->hx_event_buf = kzalloc(sizeof(uint8_t) * (hx83112f_hx_touch_data->event_size), GFP_KERNEL);
+    if (hx83112f_hx_touch_data->hx_event_buf == NULL) {
         goto mem_alloc_fail;
     }
     //#endif
@@ -1811,12 +1825,12 @@ int himax_report_data_init(int max_touch_point, int tx_num, int rx_num)
     return NO_ERR;
 
 mem_alloc_fail:
-    kfree(hx_touch_data->hx_coord_buf);
+    kfree(hx83112f_hx_touch_data->hx_coord_buf);
     //#if defined(HX_TP_PROC_DIAG)
-    kfree(hx_touch_data->hx_rawdata_buf);
+    kfree(hx83112f_hx_touch_data->hx_rawdata_buf);
     //#endif
     //#if defined(HX_SMART_WAKEUP)
-    kfree(hx_touch_data->hx_event_buf);
+    kfree(hx83112f_hx_touch_data->hx_event_buf);
     //#endif
 
     TPD_INFO("%s: Memory allocate fail!\n", __func__);
@@ -1824,38 +1838,38 @@ mem_alloc_fail:
 
 }
 
-bool himax_read_event_stack(uint8_t *buf, uint8_t length)
+bool hx83112f_read_event_stack(uint8_t *buf, uint8_t length)
 {
     uint8_t cmd[4];
 
     //  AHB_I2C Burst Read Off
     cmd[0] = 0x00;
-    if (himax_bus_write(0x11, 1, cmd) < 0) {
+    if (hx83112f_bus_write(0x11, 1, cmd) < 0) {
         TPD_INFO("%s: spi bus access fail!\n", __func__);
         return 0;
     }
 
-    himax_bus_read(0x30, length, buf);
+    hx83112f_bus_read(0x30, length, buf);
 
     //  AHB_I2C Burst Read On
     cmd[0] = 0x01;
-    if (himax_bus_write(0x11, 1, cmd) < 0) {
+    if (hx83112f_bus_write(0x11, 1, cmd) < 0) {
         TPD_INFO("%s: spi bus access fail!\n", __func__);
         return 0;
     }
     return 1;
 }
 
-int himax_ic_esd_recovery(int hx_esd_event, int hx_zero_event, int length)
+static int hx83112f_ic_esd_recovery(int hx_esd_event, int hx_zero_event, int length)
 {
     if (hx_esd_event == length) {
-        g_zero_event_count = 0;
+        hx83112f_g_zero_event_count = 0;
         goto checksum_fail;
     } else if (hx_zero_event == length) {
-        g_zero_event_count++;
-        TPD_INFO("[HIMAX TP MSG]: ALL Zero event is %d times.\n", g_zero_event_count);
-        if (g_zero_event_count > 10) {
-            g_zero_event_count = 0;
+        hx83112f_g_zero_event_count++;
+        TPD_INFO("[HIMAX TP MSG]: ALL Zero event is %d times.\n", hx83112f_g_zero_event_count);
+        if (hx83112f_g_zero_event_count > 10) {
+            hx83112f_g_zero_event_count = 0;
             TPD_INFO("[HIMAX TP MSG]: ESD event checked - ALL Zero.\n");
             goto checksum_fail;
         }
@@ -1878,7 +1892,7 @@ static int hx83112f_resetgpio_set(struct hw_resource *hw_res, bool on)
         if (ret) {
             TPD_INFO("Set the reset_gpio on=%d fail\n", on);
         } else {
-            HX_RESET_STATE = on;
+			hx83112f_hx_reset_state = on;
         }
         msleep(RESET_TO_NORMAL_TIME);
         TPD_DETAIL("%s hw_res->reset_gpio = %d\n", __func__, hw_res->reset_gpio);
@@ -1888,7 +1902,7 @@ static int hx83112f_resetgpio_set(struct hw_resource *hw_res, bool on)
 }
 #endif
 
-void himax_esd_hw_reset(struct chip_data_hx83112f *chip_info)
+void hx83112f_esd_hw_reset(struct chip_data_hx83112f *chip_info)
 {
     int ret = 0;
     int load_fw_times = 10;
@@ -1897,31 +1911,31 @@ void himax_esd_hw_reset(struct chip_data_hx83112f *chip_info)
         return;
     }
     TPD_DETAIL("START_Himax TP: ESD - Reset\n");
-    HX_ESD_RESET_ACTIVATE = 1;
+    HX83112F_HX_ESD_RESET_ACTIVATE = 1;
 
-    hx83112f_enable_interrupt(g_chip_info, false);
+    hx83112f_enable_interrupt(hx83112f_g_chip_info, false);
 
     do {
         load_fw_times--;
-        himax_mcu_firmware_update_0f(NULL);
-        ret = g_core_fp.fp_reload_disable();
+        hx83112f_mcu_firmware_update_0f(NULL);
+        ret = hx83112f_g_core_fp.fp_reload_disable();
     } while (ret && load_fw_times > 0);
 
     if (!load_fw_times) {
         TPD_INFO("%s: load_fw_times over 10 times\n", __func__);
     }
 
-    himax_sense_on(0x00);
-    himax_check_remapping();
+    hx83112f_sense_on(0x00);
+    hx83112f_check_remapping();
     /* need_modify*/
     /* report all leave event
-    himax_report_all_leave_event(private_ts);*/
+    himax_report_all_leave_event(hx83112f_private_ts);*/
 
-    hx83112f_enable_interrupt(g_chip_info, true);
+    hx83112f_enable_interrupt(hx83112f_g_chip_info, true);
 }
 
 
-int himax_checksum_cal(struct chip_data_hx83112f *chip_info, uint8_t *buf, int ts_status)
+int hx83112f_checksum_cal(struct chip_data_hx83112f *chip_info, uint8_t *buf, int ts_status)
 {
     //#if defined(HX_ESD_RECOVERY)
     int hx_EB_event = 0;
@@ -1937,7 +1951,7 @@ int himax_checksum_cal(struct chip_data_hx83112f *chip_info, uint8_t *buf, int t
 
     /* Normal */
     if (ts_status == HX_REPORT_COORD) {
-        length = hx_touch_data->touch_info_size;
+        length = hx83112f_hx_touch_data->touch_info_size;
     } else if (ts_status == HX_REPORT_SMWP_EVENT) {
         length = (GEST_PTLG_ID_LEN + GEST_PTLG_HDR_LEN);
     } else {
@@ -1962,20 +1976,20 @@ int himax_checksum_cal(struct chip_data_hx83112f *chip_info, uint8_t *buf, int t
                 hx_EC_event = 0;
                 hx_ED_event = 0;
                 hx_zero_event = 0;
-                g_zero_event_count = 0;
+                hx83112f_g_zero_event_count = 0;
             }
 
             if (hx_EB_event == length) {
                 hx_esd_event = length;
-                hx_EB_event_flag++;
+                hx83112f_hx_eb_event_flag++;
                 TPD_INFO("[HIMAX TP MSG]: ESD event checked - ALL 0xEB.\n");
             } else if (hx_EC_event == length) {
                 hx_esd_event = length;
-                hx_EC_event_flag++;
+                hx83112f_hx_ec_event_flag++;
                 TPD_INFO("[HIMAX TP MSG]: ESD event checked - ALL 0xEC.\n");
             } else if (hx_ED_event == length) {
                 hx_esd_event = length;
-                hx_ED_event_flag++;
+                hx83112f_hx_ed_event_flag++;
                 TPD_INFO("[HIMAX TP MSG]: ESD event checked - ALL 0xED.\n");
             } else {
                 hx_esd_event = 0;
@@ -1987,9 +2001,9 @@ int himax_checksum_cal(struct chip_data_hx83112f *chip_info, uint8_t *buf, int t
     if (ts_status == HX_REPORT_COORD) {
         //#ifdef HX_ESD_RECOVERY
         if (hx_esd_event == length || hx_zero_event == length) {
-            shaking_ret = himax_ic_esd_recovery(hx_esd_event, hx_zero_event, length);
+            shaking_ret = hx83112f_ic_esd_recovery(hx_esd_event, hx_zero_event, length);
             if (shaking_ret == CHECKSUM_FAIL) {
-                himax_esd_hw_reset(chip_info);
+                hx83112f_esd_hw_reset(chip_info);
                 goto checksum_fail;
             } else if (shaking_ret == ERR_WORK_OUT) {
                 goto err_workqueue_out;
@@ -1997,15 +2011,15 @@ int himax_checksum_cal(struct chip_data_hx83112f *chip_info, uint8_t *buf, int t
                 //TPD_INFO("I2C running. Nothing to be done!\n");
                 goto workqueue_out;
             }
-        } else if (HX_ESD_RESET_ACTIVATE) {
+        } else if (HX83112F_HX_ESD_RESET_ACTIVATE) {
             /* drop 1st interrupts after chip reset */
-            HX_ESD_RESET_ACTIVATE = 0;
-            TPD_INFO("[HX_ESD_RESET_ACTIVATE]:%s: Back from reset, ready to serve.\n", __func__);
+            HX83112F_HX_ESD_RESET_ACTIVATE = 0;
+            TPD_INFO("[HX83112F_HX_ESD_RESET_ACTIVATE]:%s: Back from reset, ready to serve.\n", __func__);
             goto checksum_fail;
-        } else if (HX_HW_RESET_ACTIVATE) {
+        } else if (hx83112f_hx_hw_reset_activate) {
             /* drop 1st interrupts after chip reset */
-            HX_HW_RESET_ACTIVATE = 0;
-            TPD_INFO("[HX_HW_RESET_ACTIVATE]:%s: Back from reset, ready to serve.\n", __func__);
+			hx83112f_hx_hw_reset_activate = 0;
+			TPD_INFO("[hx83112f_hx_hw_reset_activate]:%s: Back from reset, ready to serve.\n", __func__);
             goto ready_to_serve;
         }
     }
@@ -2031,15 +2045,15 @@ workqueue_out:
     //#endif
 }
 
-void himax_log_touch_data(uint8_t *buf, struct himax_report_data *hx_touch_data)
+void hx83112f_log_touch_data(uint8_t *buf, struct hx83112f_report_data *hx83112f_hx_touch_data)
 {
     int loop_i = 0;
     int print_size = 0;
 
-    if (!hx_touch_data->diag_cmd) {
-        print_size = hx_touch_data->touch_info_size;
+    if (!hx83112f_hx_touch_data->diag_cmd) {
+        print_size = hx83112f_hx_touch_data->touch_info_size;
     } else {
-        print_size = hx_touch_data->touch_all_size;
+        print_size = hx83112f_hx_touch_data->touch_all_size;
     }
     for (loop_i = 0; loop_i < print_size; loop_i++) {
         if (loop_i % 8 == 0)
@@ -2055,7 +2069,7 @@ void himax_log_touch_data(uint8_t *buf, struct himax_report_data *hx_touch_data)
     }
 }
 
-void himax_idle_mode(int disable)
+void hx83112f_idle_mode(int disable)
 {
     int retry = 20;
     uint8_t tmp_addr[4];
@@ -2070,7 +2084,7 @@ void himax_idle_mode(int disable)
         tmp_addr[2] = 0x00;
         tmp_addr[1] = 0x70;
         tmp_addr[0] = 0x88;
-        himax_register_read(tmp_addr, 4, tmp_data, false);
+        hx83112f_register_read(tmp_addr, 4, tmp_data, false);
 
         if (disable)
             switch_cmd = 0x17;
@@ -2078,9 +2092,9 @@ void himax_idle_mode(int disable)
             switch_cmd = 0x1F;
 
         tmp_data[0] = switch_cmd;
-        himax_flash_write_burst(tmp_addr, tmp_data);
+        hx83112f_flash_write_burst(tmp_addr, tmp_data);
 
-        himax_register_read(tmp_addr, 4, tmp_data, false);
+        hx83112f_register_read(tmp_addr, 4, tmp_data, false);
         TPD_INFO("%s:After turn ON/OFF IDLE Mode [0] = 0x%02X, [1] = 0x%02X, [2] = 0x%02X, [3] = 0x%02X\n", __func__, tmp_data[0], tmp_data[1], tmp_data[2], tmp_data[3]);
 
         retry--;
@@ -2090,7 +2104,7 @@ void himax_idle_mode(int disable)
     TPD_INFO("%s: setting OK!\n", __func__);
 }
 
-int hx_test_data_pop_out(struct chip_data_hx83112f *chip_info,
+int hx83112f_hx_test_data_pop_out(struct chip_data_hx83112f *chip_info,
                          char *g_Test_list_log, char *g_Company_info_log,
                          char *g_project_test_info_log, char *rslt_buf, char *filepath)
 {
@@ -2113,7 +2127,7 @@ int hx_test_data_pop_out(struct chip_data_hx83112f *chip_info,
 
     /*project Info*/
     /*Himax_DB_Test Start*/
-    snprintf(g_project_test_info_log, 118, "Project_name: %s%d\nFW_ID: %8X\nFW_Ver: %4X\nPanel Info: TX_Num=%d RX_Num=%d\nTest stage: Mobile\n",
+    snprintf(g_project_test_info_log, 118, "Project_name: %s%u\nFW_ID: %8X\nFW_Ver: %4X\nPanel Info: TX_Num=%d RX_Num=%d\nTest stage: Mobile\n",
              project_name_log,
 #if 1
              get_project(),
@@ -2149,7 +2163,7 @@ int hx_test_data_pop_out(struct chip_data_hx83112f *chip_info,
     vfs_write(raw_file, g_Test_list_log, (int)(strlen(g_Test_list_log)), &pos);
     pos = pos + (int)(strlen(g_Test_list_log));
 
-    vfs_write(raw_file, rslt_buf, g_1kind_raw_size * HX_CRITERIA_ITEM * sizeof(char), &pos);
+	vfs_write(raw_file, rslt_buf, hx83112f_g_1kind_raw_size * hx83112f_hx_criteria_item * sizeof(char), &pos);
     if (raw_file != NULL)
         filp_close(raw_file, NULL);
 
@@ -2161,16 +2175,16 @@ SAVE_DATA_ERR:
 }
 
 
-int hx_test_data_get(struct chip_data_hx83112f *chip_info, uint32_t RAW[], char *start_log, char *result, int now_item)
+int hx83112f_hx_test_data_get(struct chip_data_hx83112f *chip_info, uint32_t RAW[], char *start_log, char *result, int now_item)
 {
     uint32_t i;
 
     ssize_t len = 0;
     char *testdata = NULL;
-    uint32_t SZ_SIZE = g_1kind_raw_size;
+    uint32_t SZ_SIZE = hx83112f_g_1kind_raw_size;
 
     TPD_INFO("%s: Entering, Now type=%s!\n", __func__,
-             g_himax_inspection_mode[now_item]);
+             hx83112f_g_himax_inspection_mode[now_item]);
 
     testdata = kzalloc(sizeof(char) * SZ_SIZE, GFP_KERNEL);
     if (!testdata) {
@@ -2180,16 +2194,16 @@ int hx_test_data_get(struct chip_data_hx83112f *chip_info, uint32_t RAW[], char 
     len += snprintf((testdata + len), SZ_SIZE - len, "%s", start_log);
     for (i = 0; i < chip_info->hw_res->TX_NUM * chip_info->hw_res->RX_NUM; i++) {
         if (i > 1 && ((i + 1) % chip_info->hw_res->RX_NUM) == 0)
-            len += snprintf((testdata + len), SZ_SIZE - len, "%5d,\n", RAW[i]);
+            len += snprintf((testdata + len), SZ_SIZE - len, "%5u,\n", RAW[i]);
         else
             len += snprintf((testdata + len), SZ_SIZE - len,
-                            "%5d,", RAW[i]);
+                            "%5u,", RAW[i]);
     }
     len += snprintf((testdata + len), SZ_SIZE - len, "\n%s", result);
 
-    memcpy(&g_rslt_data[g_rslt_data_len], testdata, len);
-    g_rslt_data_len += len;
-    TPD_INFO("%s: g_rslt_data_len=%d!\n", __func__, g_rslt_data_len);
+    memcpy(&hx83112f_g_rslt_data[hx83112f_g_rslt_data_len], testdata, len);
+    hx83112f_g_rslt_data_len += len;
+    TPD_INFO("%s: hx83112f_g_rslt_data_len=%d!\n", __func__, hx83112f_g_rslt_data_len);
 
     kfree(testdata);
     TPD_INFO("%s: End!\n", __func__);
@@ -2198,7 +2212,7 @@ int hx_test_data_get(struct chip_data_hx83112f *chip_info, uint32_t RAW[], char 
 }
 
 
-int himax_get_rawdata(struct chip_data_hx83112f *chip_info, uint32_t *RAW, uint32_t datalen)
+int hx83112f_get_rawdata(struct chip_data_hx83112f *chip_info, uint32_t *RAW, uint32_t datalen)
 {
     uint8_t tmp_addr[4];
     uint8_t tmp_data[4];
@@ -2228,9 +2242,9 @@ int himax_get_rawdata(struct chip_data_hx83112f *chip_info, uint32_t *RAW, uint3
         tmp_data[2] = 0x00;
         tmp_data[1] = Data_PWD1;
         tmp_data[0] = Data_PWD0;
-        himax_flash_write_burst_length(tmp_addr, tmp_data, 4);
+        hx83112f_flash_write_burst_length(tmp_addr, tmp_data, 4);
 
-        himax_register_read(tmp_addr, 4, tmp_data, false);
+        hx83112f_register_read(tmp_addr, 4, tmp_data, false);
         if ((tmp_data[0] == Data_PWD0 && tmp_data[1] == Data_PWD1) ||
             (tmp_data[0] == Data_PWD1 && tmp_data[1] == Data_PWD0)) {
             break;
@@ -2253,7 +2267,7 @@ int himax_get_rawdata(struct chip_data_hx83112f *chip_info, uint32_t *RAW, uint3
 
         retry++;
         msleep(1);
-        himax_register_read(tmp_addr, 4, tmp_data, false);
+        hx83112f_register_read(tmp_addr, 4, tmp_data, false);
     }
 
     if (retry >= 200) {
@@ -2285,11 +2299,11 @@ int himax_get_rawdata(struct chip_data_hx83112f *chip_info, uint32_t *RAW, uint3
 
         for (i = 0; i < (total_read_times); i++) {
             if (total_size_temp >= max_i2c_size) {
-                himax_register_read(tmp_addr, max_i2c_size, &tmp_rawdata[i * max_i2c_size], false);
+                hx83112f_register_read(tmp_addr, max_i2c_size, &tmp_rawdata[i * max_i2c_size], false);
                 total_size_temp = total_size_temp - max_i2c_size;
             } else {
                 //TPD_INFO("last total_size_temp=%d\n",total_size_temp);
-                himax_register_read(tmp_addr, total_size_temp % max_i2c_size, &tmp_rawdata[i * max_i2c_size], false);
+                hx83112f_register_read(tmp_addr, total_size_temp % max_i2c_size, &tmp_rawdata[i * max_i2c_size], false);
             }
 
             address = ((i + 1) * max_i2c_size);
@@ -2311,7 +2325,7 @@ int himax_get_rawdata(struct chip_data_hx83112f *chip_info, uint32_t *RAW, uint3
     }
     if (retry >= 10) {
         TPD_INFO("Retry over 10 times: do recovery\n");
-        himax_esd_hw_reset(chip_info);
+        hx83112f_esd_hw_reset(chip_info);
         return RESULT_RETRY;
     }
 
@@ -2359,7 +2373,7 @@ int himax_get_rawdata(struct chip_data_hx83112f *chip_info, uint32_t *RAW, uint3
     return RESULT_OK;
 }
 
-void himax_switch_data_type(uint8_t checktype)
+void hx83112f_switch_data_type(uint8_t checktype)
 {
     uint8_t datatype = 0x00;
 
@@ -2398,10 +2412,10 @@ void himax_switch_data_type(uint8_t checktype)
         TPD_INFO("Wrong type=%d\n", checktype);
         break;
     }
-    himax_diag_register_set(datatype);
+    hx83112f_diag_register_set(datatype);
 }
 
-int himax_switch_mode(int mode)
+int hx83112f_switch_mode(int mode)
 {
     uint8_t tmp_addr[4];
     uint8_t tmp_data[4];
@@ -2416,7 +2430,7 @@ int himax_switch_mode(int mode)
     tmp_data[2] = 0x00;
     tmp_data[1] = 0x00;
     tmp_data[0] = 0x00;
-    himax_flash_write_burst_length(tmp_addr, tmp_data, 4);
+    hx83112f_flash_write_burst_length(tmp_addr, tmp_data, 4);
 
     //Swtich Mode
     tmp_addr[3] = 0x10;
@@ -2475,7 +2489,7 @@ int himax_switch_mode(int mode)
         tmp_data[0] = PWD_LPWUG_IDLE_START;
         break;
     }
-    himax_flash_write_burst_length(tmp_addr, tmp_data, 4);
+    hx83112f_flash_write_burst_length(tmp_addr, tmp_data, 4);
 
     TPD_INFO("%s: End of setting!\n", __func__);
 
@@ -2484,7 +2498,7 @@ int himax_switch_mode(int mode)
 }
 
 
-void himax_set_N_frame(uint16_t Nframe, uint8_t checktype)
+void hx83112f_set_N_frame(uint16_t Nframe, uint8_t checktype)
 {
     uint8_t tmp_addr[4];
     uint8_t tmp_data[4];
@@ -2497,14 +2511,14 @@ void himax_set_N_frame(uint16_t Nframe, uint8_t checktype)
     tmp_data[2] = 0x00;
     tmp_data[1] = (uint8_t)((Nframe & 0xFF00) >> 8);
     tmp_data[0] = (uint8_t)(Nframe & 0x00FF);
-    himax_flash_write_burst_length(tmp_addr, tmp_data, 4);
+    hx83112f_flash_write_burst_length(tmp_addr, tmp_data, 4);
 
     //SKIP FRMAE
     tmp_addr[3] = 0x10;
     tmp_addr[2] = 0x00;
     tmp_addr[1] = 0x70;
     tmp_addr[0] = 0xF4;
-    himax_register_read(tmp_addr, 4, tmp_data, false);
+    hx83112f_register_read(tmp_addr, 4, tmp_data, false);
 
     switch (checktype) {
     case HIMAX_INSPECTION_LPWUG_RAWDATA:
@@ -2523,11 +2537,11 @@ void himax_set_N_frame(uint16_t Nframe, uint8_t checktype)
         tmp_data[0] = BS_OPENSHORT;
         break;
     }
-    himax_flash_write_burst_length(tmp_addr, tmp_data, 4);
+    hx83112f_flash_write_burst_length(tmp_addr, tmp_data, 4);
 }
 
 
-uint32_t himax_check_mode(uint8_t checktype)
+uint32_t hx83112f_check_mode(uint8_t checktype)
 {
     uint8_t tmp_addr[4];
     uint8_t tmp_data[4];
@@ -2577,17 +2591,17 @@ uint32_t himax_check_mode(uint8_t checktype)
     tmp_addr[2] = 0x00;
     tmp_addr[1] = 0x7F;
     tmp_addr[0] = 0x04;
-    himax_register_read(tmp_addr, 4, tmp_data, false);
-    TPD_INFO("%s: himax_wait_sorting_mode, tmp_data[0]=%x, tmp_data[1]=%x\n", __func__, tmp_data[0], tmp_data[1]);
+    hx83112f_register_read(tmp_addr, 4, tmp_data, false);
+    TPD_INFO("%s: hx83112f_wait_sorting_mode, tmp_data[0]=%x, tmp_data[1]=%x\n", __func__, tmp_data[0], tmp_data[1]);
 
     if (wait_pwd[0] == tmp_data[0] && wait_pwd[1] == tmp_data[1]) {
-        TPD_INFO("Change to mode=%s\n", g_himax_inspection_mode[checktype]);
+        TPD_INFO("Change to mode=%s\n", hx83112f_g_himax_inspection_mode[checktype]);
         return 0;
     } else
         return 1;
 }
 
-void himax_get_noise_base(void)
+void hx83112f_get_noise_base(void)
 {
     uint8_t tmp_addr[4];
     uint8_t tmp_data[4];
@@ -2602,21 +2616,21 @@ void himax_get_noise_base(void)
     tmp_addr[2] = 0x00;
     tmp_addr[1] = 0x70;
     tmp_addr[0] = 0x94; /*ratio*/
-    himax_register_read(tmp_addr, 4, tmp_data, false);
+    hx83112f_register_read(tmp_addr, 4, tmp_data, false);
     ratio = tmp_data[1];
 
     tmp_addr[3] = 0x10;
     tmp_addr[2] = 0x00;
     tmp_addr[1] = 0x70;
     tmp_addr[0] = 0xA0; /*threshold_LPWUG*/
-    himax_register_read(tmp_addr, 4, tmp_data, false);
+    hx83112f_register_read(tmp_addr, 4, tmp_data, false);
     threshold_LPWUG = tmp_data[0];
 
     tmp_addr[3] = 0x10;
     tmp_addr[2] = 0x00;
     tmp_addr[1] = 0x70;
     tmp_addr[0] = 0x9C; /*threshold*/
-    himax_register_read(tmp_addr, 4, tmp_data, false);
+    hx83112f_register_read(tmp_addr, 4, tmp_data, false);
     threshold = tmp_data[0];
 
     /*TPD_INFO("tmp_data[0]=0x%x tmp_data[1]=0x%x tmp_data[2]=0x%x tmp_data[3]=0x%x\n",
@@ -2628,7 +2642,7 @@ void himax_get_noise_base(void)
     TPD_INFO("NOISEMAX=%d LPWUG_NOISE_MAX=%d \n", NOISEMAX, LPWUG_NOISEMAX);
 }
 
-uint16_t himax_get_noise_weight(void)
+uint16_t hx83112f_get_noise_weight(void)
 {
     uint8_t tmp_addr[4];
     uint8_t tmp_data[4];
@@ -2638,14 +2652,14 @@ uint16_t himax_get_noise_weight(void)
     tmp_addr[2] = 0x00;
     tmp_addr[1] = 0x72;
     tmp_addr[0] = 0xC8;
-    himax_register_read(tmp_addr, 4, tmp_data, false);
+    hx83112f_register_read(tmp_addr, 4, tmp_data, false);
     weight = (tmp_data[1] << 8) | tmp_data[0];
     TPD_INFO("%s: weight = %d ", __func__, weight);
 
     return weight;
 }
 
-uint32_t himax_wait_sorting_mode(uint8_t checktype)
+uint32_t hx83112f_wait_sorting_mode(uint8_t checktype)
 {
     uint8_t tmp_addr[4];
     uint8_t tmp_data[4];
@@ -2696,8 +2710,8 @@ uint32_t himax_wait_sorting_mode(uint8_t checktype)
         tmp_addr[2] = 0x00;
         tmp_addr[1] = 0x7F;
         tmp_addr[0] = 0x04;
-        himax_register_read(tmp_addr, 4, tmp_data, false);
-        TPD_INFO("%s: himax_wait_sorting_mode, tmp_data[0]=%x, tmp_data[1]=%x\n", __func__, tmp_data[0], tmp_data[1]);
+        hx83112f_register_read(tmp_addr, 4, tmp_data, false);
+        TPD_INFO("%s: hx83112f_wait_sorting_mode, tmp_data[0]=%x, tmp_data[1]=%x\n", __func__, tmp_data[0], tmp_data[1]);
 
         if (wait_pwd[0] == tmp_data[0] && wait_pwd[1] == tmp_data[1]) {
             return 0;
@@ -2706,21 +2720,21 @@ uint32_t himax_wait_sorting_mode(uint8_t checktype)
         tmp_addr[2] = 0x00;
         tmp_addr[1] = 0x00;
         tmp_addr[0] = 0xA8;
-        himax_register_read(tmp_addr, 4, tmp_data, false);
+        hx83112f_register_read(tmp_addr, 4, tmp_data, false);
         TPD_INFO("%s: 0x900000A8, tmp_data[0]=%x, tmp_data[1]=%x, tmp_data[2]=%x, tmp_data[3]=%x \n", __func__, tmp_data[0], tmp_data[1], tmp_data[2], tmp_data[3]);
 
         tmp_addr[3] = 0x90;
         tmp_addr[2] = 0x00;
         tmp_addr[1] = 0x00;
         tmp_addr[0] = 0xE4;
-        himax_register_read(tmp_addr, 4, tmp_data, false);
+        hx83112f_register_read(tmp_addr, 4, tmp_data, false);
         TPD_INFO("%s: 0x900000E4, tmp_data[0]=%x, tmp_data[1]=%x, tmp_data[2]=%x, tmp_data[3]=%x \n", __func__, tmp_data[0], tmp_data[1], tmp_data[2], tmp_data[3]);
 
         tmp_addr[3] = 0x90;
         tmp_addr[2] = 0x00;
         tmp_addr[1] = 0x00;
         tmp_addr[0] = 0xF8;
-        himax_register_read(tmp_addr, 4, tmp_data, false);
+        hx83112f_register_read(tmp_addr, 4, tmp_data, false);
         TPD_INFO("%s: 0x900000F8, tmp_data[0]=%x, tmp_data[1]=%x, tmp_data[2]=%x, tmp_data[3]=%x \n", __func__, tmp_data[0], tmp_data[1], tmp_data[2], tmp_data[3]);
         TPD_INFO("Now retry %d times!\n", count++);
         msleep(50);
@@ -2729,7 +2743,7 @@ uint32_t himax_wait_sorting_mode(uint8_t checktype)
     return 1;
 }
 
-int mpTestFunc(struct chip_data_hx83112f *chip_info, uint8_t checktype, uint32_t datalen)
+int hx83112f_mpTestFunc(struct chip_data_hx83112f *chip_info, uint8_t checktype, uint32_t datalen)
 {
     uint8_t tmp_addr[4] = {0};
     uint8_t tmp_data[4] = {0};
@@ -2749,65 +2763,65 @@ int mpTestFunc(struct chip_data_hx83112f *chip_info, uint8_t checktype, uint32_t
     int CRITERIA_LPWUG_IDLE_RAWDATA_MAX = LPWUG_IDLE_RAWDATA_MAX;
 
 
-    if (himax_check_mode(checktype)) {
-        TPD_INFO("Need Change Mode, target=%s", g_himax_inspection_mode[checktype]);
+    if (hx83112f_check_mode(checktype)) {
+        TPD_INFO("Need Change Mode, target=%s", hx83112f_g_himax_inspection_mode[checktype]);
 
-        himax_sense_off();
+        hx83112f_sense_off();
 
-        himax_switch_mode(checktype);
+        hx83112f_switch_mode(checktype);
 
         if (checktype == HIMAX_INSPECTION_NOISE) {
-            himax_set_N_frame(NOISEFRAME, checktype);
-            /*himax_get_noise_base();*/
+            hx83112f_set_N_frame(NOISEFRAME, checktype);
+            /*hx83112f_get_noise_base();*/
         } else if(checktype >= HIMAX_INSPECTION_LPWUG_RAWDATA) {
             TPD_INFO("N frame = %d\n", 1);
-            himax_set_N_frame(1, checktype);
+            hx83112f_set_N_frame(1, checktype);
         } else {
-            himax_set_N_frame(2, checktype);
+            hx83112f_set_N_frame(2, checktype);
         }
 
 
-        himax_sense_on(1);
+        hx83112f_sense_on(1);
 
-        ret = himax_wait_sorting_mode(checktype);
+        ret = hx83112f_wait_sorting_mode(checktype);
         if (ret) {
-            TPD_INFO("%s: himax_wait_sorting_mode FAIL\n", __func__);
+            TPD_INFO("%s: hx83112f_wait_sorting_mode FAIL\n", __func__);
             return ret;
         }
     }
 
-    himax_switch_data_type(checktype);
+    hx83112f_switch_data_type(checktype);
 
-    ret = himax_get_rawdata(chip_info, RAW, datalen);
+    ret = hx83112f_get_rawdata(chip_info, RAW, datalen);
     if (ret) {
-        TPD_INFO("%s: himax_get_rawdata FAIL\n", __func__);
+        TPD_INFO("%s: hx83112f_get_rawdata FAIL\n", __func__);
 
         tmp_addr[3] = 0x90;
         tmp_addr[2] = 0x00;
         tmp_addr[1] = 0x00;
         tmp_addr[0] = 0xA8;
-        himax_register_read(tmp_addr, 4, tmp_data, false);
+        hx83112f_register_read(tmp_addr, 4, tmp_data, false);
         TPD_INFO("%s: 900000A8: data[0]=%0x02X, data[1]=%0x02X, data[2]=%0x02X, data[3]=%0x02X, \n", __func__, tmp_data[0], tmp_data[1], tmp_data[2], tmp_data[3]);
 
         tmp_addr[3] = 0x10;
         tmp_addr[2] = 0x00;
         tmp_addr[1] = 0x7F;
         tmp_addr[0] = 0x40;
-        himax_register_read(tmp_addr, 4, tmp_data, false);
+        hx83112f_register_read(tmp_addr, 4, tmp_data, false);
         TPD_INFO("%s: 10007F40: data[0]=%0x02X, data[1]=%0x02X, data[2]=%0x02X, data[3]=%0x02X, \n", __func__, tmp_data[0], tmp_data[1], tmp_data[2], tmp_data[3]);
 
         tmp_addr[3] = 0x10;
         tmp_addr[2] = 0x00;
         tmp_addr[1] = 0x00;
         tmp_addr[0] = 0x00;
-        himax_register_read(tmp_addr, 4, tmp_data, false);
+        hx83112f_register_read(tmp_addr, 4, tmp_data, false);
         TPD_INFO("%s: 10000000: data[0]=%0x02X, data[1]=%0x02X, data[2]=%0x02X, data[3]=%0x02X, \n", __func__, tmp_data[0], tmp_data[1], tmp_data[2], tmp_data[3]);
 
         tmp_addr[3] = 0x10;
         tmp_addr[2] = 0x00;
         tmp_addr[1] = 0x7F;
         tmp_addr[0] = 0x04;
-        himax_register_read(tmp_addr, 4, tmp_data, false);
+        hx83112f_register_read(tmp_addr, 4, tmp_data, false);
         TPD_INFO("%s: 10007F04: data[0]=%0x02X, data[1]=%0x02X, data[2]=%0x02X, data[3]=%0x02X, \n", __func__, tmp_data[0], tmp_data[1], tmp_data[2], tmp_data[3]);
 
         //tmp_addr[3] = 0x80;
@@ -2819,7 +2833,7 @@ int mpTestFunc(struct chip_data_hx83112f *chip_info, uint8_t checktype, uint32_t
         tmp_addr[2] = 0x00;
         tmp_addr[1] = 0x72;
         tmp_addr[0] = 0xEC;
-        himax_register_read(tmp_addr, 4, tmp_data, false);
+        hx83112f_register_read(tmp_addr, 4, tmp_data, false);
         TPD_INFO("%s: 800204B4: data[0]=%0x02X, data[1]=%0x02X, data[2]=%0x02X, data[3]=%0x02X, \n", __func__, tmp_data[0], tmp_data[1], tmp_data[2], tmp_data[3]);
 
         //900000A8,10007F40,10000000,10007F04,800204B4
@@ -2827,7 +2841,7 @@ int mpTestFunc(struct chip_data_hx83112f *chip_info, uint8_t checktype, uint32_t
     }
 
     /* back to normal */
-    himax_switch_data_type(HIMAX_INSPECTION_BACK_NORMAL);
+    hx83112f_switch_data_type(HIMAX_INSPECTION_BACK_NORMAL);
 
     rslt_log = kzalloc(256 * sizeof(char), GFP_KERNEL);
     if (!rslt_log) {
@@ -2841,12 +2855,12 @@ int mpTestFunc(struct chip_data_hx83112f *chip_info, uint8_t checktype, uint32_t
     }
 
     snprintf(start_log, 256 * sizeof(char), "\n%s%s\n",
-             g_himax_inspection_mode[checktype], ": data as follow!\n");
+             hx83112f_g_himax_inspection_mode[checktype], ": data as follow!\n");
     //Check Data
     switch (checktype) {
     case HIMAX_INSPECTION_OPEN:
         for (i = 0; i < (chip_info->hw_res->TX_NUM * chip_info->hw_res->RX_NUM); i++) {
-            if(isRead_csv == false) {
+			if (hx83112f_isread_csv == false) {
                 if (RAW[i] > OPENMAX || RAW[i] < OPENMIN) {
                     TPD_INFO("%s: open test FAIL\n", __func__);
                     ret = RESULT_ERR;
@@ -2865,7 +2879,7 @@ int mpTestFunc(struct chip_data_hx83112f *chip_info, uint8_t checktype, uint32_t
 
     case HIMAX_INSPECTION_MICRO_OPEN:
         for (i = 0; i < (chip_info->hw_res->TX_NUM * chip_info->hw_res->RX_NUM); i++) {
-            if(isRead_csv == false) {
+			if (hx83112f_isread_csv == false) {
                 if (RAW[i] > M_OPENMAX || RAW[i] < M_OPENMIN) {
                     TPD_INFO("%s: micro open test FAIL\n", __func__);
                     ret =  RESULT_ERR;
@@ -2887,7 +2901,7 @@ int mpTestFunc(struct chip_data_hx83112f *chip_info, uint8_t checktype, uint32_t
 
     case HIMAX_INSPECTION_SHORT:
         for (i = 0; i < (chip_info->hw_res->TX_NUM * chip_info->hw_res->RX_NUM); i++) {
-            if(isRead_csv == false) {
+			if (hx83112f_isread_csv == false) {
                 if (RAW[i] > SHORTMAX || RAW[i] < SHORTMIN) {
                     TPD_INFO("%s: short test FAIL\n", __func__);
                     ret = RESULT_ERR;
@@ -2906,7 +2920,7 @@ int mpTestFunc(struct chip_data_hx83112f *chip_info, uint8_t checktype, uint32_t
 
     case HIMAX_INSPECTION_RAWDATA:
         for (i = 0; i < (chip_info->hw_res->TX_NUM * chip_info->hw_res->RX_NUM); i++) {
-            if(isRead_csv == false) {
+			if (hx83112f_isread_csv == false) {
                 if (RAW[i] > CRITERIA_RAWDATA_MAX || RAW[i] < CRITERIA_RAWDATA_MIN) {
                     TPD_INFO("%s: rawdata test FAIL\n", __func__);
                     ret = RESULT_ERR;
@@ -2933,10 +2947,10 @@ int mpTestFunc(struct chip_data_hx83112f *chip_info, uint8_t checktype, uint32_t
                 return RESULT_ERR;
             }
         }*/
-        himax_get_noise_base();
+        hx83112f_get_noise_base();
 
-        snprintf(start_log, 256 * sizeof(char), "\n Threshold = %d\n", NOISEMAX);
-        weight = himax_get_noise_weight();
+        snprintf(start_log, 256 * sizeof(char), "\n Threshold = %hu\n", NOISEMAX);
+        weight = hx83112f_get_noise_weight();
         if (weight > NOISEMAX) {
             TPD_INFO("%s: noise test FAIL\n", __func__);
             ret = RESULT_ERR;
@@ -2947,10 +2961,10 @@ int mpTestFunc(struct chip_data_hx83112f *chip_info, uint8_t checktype, uint32_t
 #ifdef RAWDATA_NOISE
         TPD_INFO("[MP_RAW_TEST_RAW]\n");
 
-        himax_switch_data_type(HIMAX_INSPECTION_RAWDATA);
-        ret = himax_get_rawdata(chip_info, RAW, datalen);
+        hx83112f_switch_data_type(HIMAX_INSPECTION_RAWDATA);
+        ret = hx83112f_get_rawdata(chip_info, RAW, datalen);
         if (ret == RESULT_ERR) {
-            TPD_INFO("%s: himax_get_rawdata FAIL\n", __func__);
+            TPD_INFO("%s: hx83112f_get_rawdata FAIL\n", __func__);
             ret = RESULT_ERR;
         }
 #endif
@@ -2958,7 +2972,7 @@ int mpTestFunc(struct chip_data_hx83112f *chip_info, uint8_t checktype, uint32_t
 
     case HIMAX_INSPECTION_LPWUG_RAWDATA:
         for (i = 0; i < (chip_info->hw_res->TX_NUM * chip_info->hw_res->RX_NUM); i++) {
-            if(isRead_csv == false) {
+			if (hx83112f_isread_csv == false) {
                 if (RAW[i] > CRITERIA_LPWUG_RAWDATA_MAX || RAW[i] < LPWUG_RAWDATA_MIN) {
                     TPD_INFO("%s: HIMAX_INSPECTION_LPWUG_RAWDATA FAIL\n", __func__);
                     ret = THP_AFE_INSPECT_ERAW;
@@ -2975,9 +2989,9 @@ int mpTestFunc(struct chip_data_hx83112f *chip_info, uint8_t checktype, uint32_t
             TPD_INFO("%s: HIMAX_INSPECTION_LPWUG_RAWDATA PASS\n", __func__);
         break;
     case HIMAX_INSPECTION_LPWUG_NOISE:
-        himax_get_noise_base();
-        weight = himax_get_noise_weight();
-        if(isRead_csv == false) {
+        hx83112f_get_noise_base();
+        weight = hx83112f_get_noise_weight();
+		if (hx83112f_isread_csv == false) {
             if (weight > LPWUG_NOISEMAX || weight < LPWUG_NOISE_MIN) {
                 TPD_INFO("%s: HIMAX_INSPECTION_LPWUG_NOISE FAIL\n", __func__);
                 ret = THP_AFE_INSPECT_ENOISE;
@@ -2994,7 +3008,7 @@ int mpTestFunc(struct chip_data_hx83112f *chip_info, uint8_t checktype, uint32_t
 
     case HIMAX_INSPECTION_LPWUG_IDLE_RAWDATA:
         for (i = 0; i < (chip_info->hw_res->TX_NUM * chip_info->hw_res->RX_NUM); i++) {
-            if(isRead_csv == false) {
+			if (hx83112f_isread_csv == false) {
                 if (RAW[i] > CRITERIA_LPWUG_IDLE_RAWDATA_MAX || RAW[i] < LPWUG_IDLE_RAWDATA_MIN) {
                     TPD_INFO("%s: HIMAX_INSPECTION_LPWUG_IDLE_RAWDATA FAIL\n", __func__);
                     ret = THP_AFE_INSPECT_ERAW;
@@ -3012,7 +3026,7 @@ int mpTestFunc(struct chip_data_hx83112f *chip_info, uint8_t checktype, uint32_t
         break;
     case HIMAX_INSPECTION_LPWUG_IDLE_NOISE:
         for (i = 0; i < (chip_info->hw_res->TX_NUM * chip_info->hw_res->RX_NUM); i++) {
-            if(isRead_csv == false) {
+			if (hx83112f_isread_csv == false) {
                 if ((int)RAW[i] > LPWUG_IDLE_NOISE_MAX || (int)RAW[i] < LPWUG_IDLE_NOISE_MIN) {
                     TPD_INFO("%s: HIMAX_INSPECTION_LPWUG_IDLE_NOISE FAIL\n", __func__);
                     ret = THP_AFE_INSPECT_ENOISE;
@@ -3034,10 +3048,12 @@ int mpTestFunc(struct chip_data_hx83112f *chip_info, uint8_t checktype, uint32_t
         break;
     }
 
-    snprintf(rslt_log, 256 * sizeof(char), "\n%s%s\n",
-             g_himax_inspection_mode[checktype], " Test Pass!\n");
+	if (ret)
+		snprintf(rslt_log, 256 * sizeof(char), "\n%s%s\n", hx83112f_g_himax_inspection_mode[checktype], " Test Fail!\n");
+	else
+		snprintf(rslt_log, 256 * sizeof(char), "\n%s%s\n", hx83112f_g_himax_inspection_mode[checktype], " Test Pass!\n");
 
-    hx_test_data_get(chip_info, RAW, start_log, rslt_log, checktype);
+    hx83112f_hx_test_data_get(chip_info, RAW, start_log, rslt_log, checktype);
 
     if (rslt_log) {
         kfree(rslt_log);
@@ -3055,10 +3071,13 @@ RET_OUT:
     if (rslt_log) {
         kfree(rslt_log);
     }
+    if (start_log) {
+        kfree(start_log);
+    }
     return RESULT_ERR;
 }
 
-static int himax_saperate_comma(const struct firmware *file_entry,
+int hx83112f_saperate_comma(const struct firmware *file_entry,
                                 char **result, int str_size)
 {
     int count = 0;
@@ -3094,7 +3113,7 @@ static int himax_saperate_comma(const struct firmware *file_entry,
     return str_count;
 }
 
-static int hx_diff_str(char *str1, char *str2)
+int hx83112f_hx_diff_str(char *str1, char *str2)
 {
     int i = 0;
     int result = 0; /* zero is all same, non-zero is not same index*/
@@ -3118,20 +3137,20 @@ static int hx_diff_str(char *str1, char *str2)
 }
 
 /* get idx of criteria whe parsing file */
-int hx_find_crtra_id(char *input)
+int hx83112f_hx_find_crtra_id(char *input)
 {
     int i = 0;
     int result = 0;
 
-    for (i = 0 ; i < HX_CRITERIA_SIZE ; i++) {
-        if (hx_diff_str(g_hx_inspt_crtra_name[i], input) == 0) {
+	for (i = 0 ; i < hx83112f_hx_criteria_size ; i++) {
+        if (hx83112f_hx_diff_str(hx83112f_g_hx_inspt_crtra_name[i], input) == 0) {
             result = i;
             TPD_INFO("find the str=%s, idx=%d\n",
-                     g_hx_inspt_crtra_name[i], i);
+                     hx83112f_g_hx_inspt_crtra_name[i], i);
             break;
         }
     }
-    if (i > (HX_CRITERIA_SIZE - 1)) {
+	if (i > (hx83112f_hx_criteria_size - 1)) {
         TPD_INFO("%s: find Fail!\n", __func__);
         return LENGTH_FAIL;
     }
@@ -3140,7 +3159,7 @@ int hx_find_crtra_id(char *input)
 }
 
 /* claculate 10's power function */
-static int himax_power_cal(int pow, int number)
+int hx83112f_power_cal(int pow, int number)
 {
     int i = 0;
     int result = 1;
@@ -3154,7 +3173,7 @@ static int himax_power_cal(int pow, int number)
 }
 
 /* String to int */
-static int hiamx_parse_str2int(char *str)
+int hx83112f_parse_str2int(char *str)
 {
     int i = 0;
     int temp_cal = 0;
@@ -3174,7 +3193,7 @@ static int hiamx_parse_str2int(char *str)
             continue;
         }
         temp_cal = str[i] - '0';
-        result += himax_power_cal(str_len - i - 1, temp_cal);
+        result += hx83112f_power_cal(str_len - i - 1, temp_cal);
         /* str's the lowest char is the number's the highest number
          * So we should reverse this number before using the power
          * function
@@ -3188,13 +3207,13 @@ static int hiamx_parse_str2int(char *str)
     return result;
 }
 
-int hx_print_crtra_after_parsing(struct chip_data_hx83112f *chip_info)
+int hx83112f_hx_print_crtra_after_parsing(struct chip_data_hx83112f *chip_info)
 {
     int i = 0, j = 0;
     int all_mut_len = chip_info->hw_res->TX_NUM * chip_info->hw_res->RX_NUM;
 
-    for (i = 0; i < HX_CRITERIA_SIZE; i++) {
-        TPD_DETAIL("Now is %s\n", g_hx_inspt_crtra_name[i]);
+	for (i = 0; i < hx83112f_hx_criteria_size; i++) {
+        TPD_DETAIL("Now is %s\n", hx83112f_g_hx_inspt_crtra_name[i]);
         if (hx83112f_nf_inspt_crtra_flag[i] == 1) {
             for (j = 0; j < all_mut_len; j++) {
                 printk(KERN_CONT "%d, ", hx83112f_nf_inspection_criteria[i][j]);
@@ -3210,7 +3229,7 @@ int hx_print_crtra_after_parsing(struct chip_data_hx83112f *chip_info)
     return 0;
 }
 
-static int hx_get_crtra_by_name(struct chip_data_hx83112f *chip_info, char **result, int size_of_result_str)
+int hx83112f_hx_get_crtra_by_name(struct chip_data_hx83112f *chip_info, char **result, int size_of_result_str)
 {
     int i = 0;
     /* count of criteria type */
@@ -3238,11 +3257,11 @@ static int hx_get_crtra_by_name(struct chip_data_hx83112f *chip_info, char **res
             /* check the item of criteria is in criteria file
             * or not
             */
-            count_type = hx_find_crtra_id(result[i]);
+            count_type = hx83112f_hx_find_crtra_id(result[i]);
             if (count_type < 0) {
                 TPD_INFO("1. %s:Name Not match!\n", __func__);
                 /* E("can recognize[%d]=%s\n", count_type,
-                 * g_hx_inspt_crtra_name[count_type]);
+                 * hx83112f_g_hx_inspt_crtra_name[count_type]);
                  */
                 TPD_INFO("get from file[%d]=%s\n", i, result[i]);
                 TPD_INFO("Please check criteria file again!\n");
@@ -3250,19 +3269,19 @@ static int hx_get_crtra_by_name(struct chip_data_hx83112f *chip_info, char **res
                 goto END_FUNCTION;
             } else {
                 TPD_INFO("Now str=%s, idx=%d\n",
-                         g_hx_inspt_crtra_name[count_type], count_type);
+                         hx83112f_g_hx_inspt_crtra_name[count_type], count_type);
                 hx83112f_nf_inspt_crtra_flag[count_type] = 1;
             }
             continue;
         }
         /* change string to int*/
-        temp = hiamx_parse_str2int(result[i]);
+        temp = hx83112f_parse_str2int(result[i]);
         if (temp != -9487) {
             hx83112f_nf_inspection_criteria[count_type][count_data] = temp;
         } else {
             TPD_INFO("%s: Parsing Fail in %d\n", __func__, i);
             TPD_INFO("in range:[%d]=%s\n", count_type,
-                     g_hx_inspt_crtra_name[count_type]);
+                     hx83112f_g_hx_inspt_crtra_name[count_type]);
             TPD_INFO("btw, get from file[%d]=%s\n", i, result[i]);
             break;
         }
@@ -3276,7 +3295,7 @@ static int hx_get_crtra_by_name(struct chip_data_hx83112f *chip_info, char **res
     }
 
     /* dbg:print all of criteria from parsing file */
-    hx_print_crtra_after_parsing(chip_info);
+    hx83112f_hx_print_crtra_after_parsing(chip_info);
 
     TPD_INFO("Total loop=%d\n", i);
 END_FUNCTION:
@@ -3288,7 +3307,7 @@ END_FUNCTION:
  * return size of result
  */
 
-int hx_get_size_str_arr(char **input)
+int hx83112f_hx_get_size_str_arr(char **input)
 {
     int i = 0;
     int result = 0;
@@ -3301,7 +3320,7 @@ int hx_get_size_str_arr(char **input)
 
     return result;
 }
-static void himax_limit_get(struct touchpanel_data *ts, struct hx_limit_data *limit)
+void hx83112f_limit_get(struct touchpanel_data *ts, struct hx_limit_data *limit)
 {
     int err = THP_AFE_INSPECT_OK;
     const struct firmware *file_entry = NULL;
@@ -3311,7 +3330,7 @@ static void himax_limit_get(struct touchpanel_data *ts, struct hx_limit_data *li
     int j = 0;
     int crtra_count;
     int data_size = 0; /* The maximum of number Data*/
-    int all_mut_len = g_chip_info->hw_res->TX_NUM * g_chip_info->hw_res->RX_NUM;
+    int all_mut_len = hx83112f_g_chip_info->hw_res->TX_NUM * hx83112f_g_chip_info->hw_res->RX_NUM;
     int str_max_len = 0;
     int result_all_len = 0;
     int file_size = 0;
@@ -3319,25 +3338,25 @@ static void himax_limit_get(struct touchpanel_data *ts, struct hx_limit_data *li
 
     TPD_INFO("%s, Entering\n", __func__);
 
-    HX_CRITERIA_ITEM = hx_get_size_str_arr(g_himax_inspection_mode);
-    HX_CRITERIA_SIZE = hx_get_size_str_arr(g_hx_inspt_crtra_name);
-    TPD_INFO("%s:There is %d HX_CRITERIA_ITEM and %d HX_CRITERIA_SIZE\n",
-             __func__, HX_CRITERIA_ITEM, HX_CRITERIA_SIZE);
-    crtra_count = HX_CRITERIA_SIZE;
+	hx83112f_hx_criteria_item = hx83112f_hx_get_size_str_arr(hx83112f_g_himax_inspection_mode);
+	hx83112f_hx_criteria_size = hx83112f_hx_get_size_str_arr(hx83112f_g_hx_inspt_crtra_name);
+	TPD_INFO("%s:There is %d hx83112f_hx_criteria_item and %d hx83112f_hx_criteria_size\n",
+             __func__, hx83112f_hx_criteria_item, hx83112f_hx_criteria_size);
+	crtra_count = hx83112f_hx_criteria_size;
     /* init criteria data*/
     if (!hx83112f_nf_inspt_crtra_flag)
-        hx83112f_nf_inspt_crtra_flag = kzalloc(HX_CRITERIA_SIZE * sizeof(int), GFP_KERNEL);
+        hx83112f_nf_inspt_crtra_flag = kzalloc(hx83112f_hx_criteria_size * sizeof(int), GFP_KERNEL);
     if (!hx83112f_nf_inspection_criteria)
-        hx83112f_nf_inspection_criteria = kzalloc(sizeof(int *)*HX_CRITERIA_SIZE, GFP_KERNEL);
+        hx83112f_nf_inspection_criteria = kzalloc(sizeof(int *)*hx83112f_hx_criteria_size, GFP_KERNEL);
     if (hx83112f_nf_inspt_crtra_flag == NULL || hx83112f_nf_inspection_criteria == NULL) {
         TPD_INFO("%s: %d, Memory allocation falied!\n", __func__, __LINE__);
         goto FAIL_ALLOC_MEM;
     }
 
-    for (i = 0; i < HX_CRITERIA_SIZE; i++) {
+	for (i = 0; i < hx83112f_hx_criteria_size; i++) {
         if (!hx83112f_nf_inspection_criteria[i]) {
             hx83112f_nf_inspection_criteria[i] = kcalloc(
-                    (g_chip_info->hw_res->TX_NUM * g_chip_info->hw_res->RX_NUM), sizeof(int), GFP_KERNEL);
+                    (hx83112f_g_chip_info->hw_res->TX_NUM * hx83112f_g_chip_info->hw_res->RX_NUM), sizeof(int), GFP_KERNEL);
         }
         if (hx83112f_nf_inspection_criteria[i] == NULL) {
             TPD_INFO("%s: %d, Memory allocation falied!\n", __func__, __LINE__);
@@ -3346,13 +3365,13 @@ static void himax_limit_get(struct touchpanel_data *ts, struct hx_limit_data *li
     }
 
     /* get file */
-    TPD_INFO("file name = %s\n", g_chip_info->test_limit_name);
+    TPD_INFO("file name = %s\n", hx83112f_g_chip_info->test_limit_name);
     /* default path is /system/etc/firmware */
-    err = request_firmware(&file_entry, g_chip_info->test_limit_name, private_ts->dev);
+    err = request_firmware(&file_entry, hx83112f_g_chip_info->test_limit_name, hx83112f_private_ts->dev);
     if (err < 0) {
         TPD_INFO("%s, fail in line%d error code=%d\n", __func__, __LINE__, err);
         err = THP_AFE_INSPECT_EFILE;
-        isRead_csv = false;
+        hx83112f_isread_csv = false;
         goto END_FUNC_REQ_FAIL;
     }
 
@@ -3361,9 +3380,9 @@ static void himax_limit_get(struct touchpanel_data *ts, struct hx_limit_data *li
 
     limit->item_name = kzalloc(sizeof(char *) * limit->item_size, GFP_KERNEL);
     for (i = 0; i < limit->item_size; i++) {
-        if (g_hx_inspt_crtra_name[i] != NULL) {
-            limit->item_name[i] = kzalloc(sizeof(char) * strlen(g_hx_inspt_crtra_name[i]), GFP_KERNEL);
-            memcpy(limit->item_name[i], g_hx_inspt_crtra_name[i], sizeof(char) * strlen(g_hx_inspt_crtra_name[i]));
+        if (hx83112f_g_hx_inspt_crtra_name[i] != NULL) {
+            limit->item_name[i] = kzalloc(sizeof(char) * strlen(hx83112f_g_hx_inspt_crtra_name[i]), GFP_KERNEL);
+            memcpy(limit->item_name[i], hx83112f_g_hx_inspt_crtra_name[i], sizeof(char) * strlen(hx83112f_g_hx_inspt_crtra_name[i]));
         }
     }
     limit->crtra_val = kzalloc(sizeof(int *) * limit->item_size, GFP_KERNEL);
@@ -3377,9 +3396,9 @@ static void himax_limit_get(struct touchpanel_data *ts, struct hx_limit_data *li
     /* init the array which store original criteria and include
      *  name string
      */
-    while (g_hx_inspt_crtra_name[j] != NULL) {
-        if (strlen(g_hx_inspt_crtra_name[j]) > str_max_len)
-            str_max_len = strlen(g_hx_inspt_crtra_name[j]);
+    while (hx83112f_g_hx_inspt_crtra_name[j] != NULL) {
+        if (strlen(hx83112f_g_hx_inspt_crtra_name[j]) > str_max_len)
+            str_max_len = strlen(hx83112f_g_hx_inspt_crtra_name[j]);
         j++;
     }
 
@@ -3417,11 +3436,11 @@ static void himax_limit_get(struct touchpanel_data *ts, struct hx_limit_data *li
 
     /* parse value in to result array(1-Dimensional/String) */
     size_of_result_str =
-        himax_saperate_comma(file_entry, result, data_size);
+        hx83112f_saperate_comma(file_entry, result, data_size);
 
     TPD_INFO("%s: now size_of_result_str=%d\n", __func__, size_of_result_str);
 
-    err = hx_get_crtra_by_name(g_chip_info, result, size_of_result_str);
+    err = hx83112f_hx_get_crtra_by_name(hx83112f_g_chip_info, result, size_of_result_str);
     if (err != THP_AFE_INSPECT_OK) {
         TPD_INFO("%s:Load criteria from file fail, go end!\n", __func__);
     } else {
@@ -3444,7 +3463,7 @@ FAIL_ALLOC_MEM:
         kfree(hx83112f_nf_inspt_crtra_flag);
     }
     if (hx83112f_nf_inspection_criteria != NULL) {
-        for (i = 0; i < HX_CRITERIA_SIZE; i++) {
+        for (i = 0; i < hx83112f_hx_criteria_size; i++) {
             if (hx83112f_nf_inspection_criteria[i] != NULL) {
                 kfree(hx83112f_nf_inspection_criteria[i]);
             }
@@ -3466,14 +3485,14 @@ END_FUNC_REQ_FAIL:
     TPD_INFO("%s, END\n", __func__);
 }
 
-static int himax_parse_criteria_file(struct chip_data_hx83112f *chip_info)
+int hx83112f_parse_criteria_file(struct chip_data_hx83112f *chip_info)
 {
     int err = THP_AFE_INSPECT_OK;
     const struct firmware *file_entry = NULL;
-    static char **result;
+	static char **result = NULL;
     int i = 0;
     int j = 0;
-    int crtra_count = HX_CRITERIA_SIZE;
+	int crtra_count = hx83112f_hx_criteria_size;
     int data_size = 0; /* The maximum of number Data*/
     int all_mut_len = chip_info->hw_res->TX_NUM * chip_info->hw_res->RX_NUM;
     int str_max_len = 0;
@@ -3485,11 +3504,11 @@ static int himax_parse_criteria_file(struct chip_data_hx83112f *chip_info)
     TPD_INFO("file name = %s\n", chip_info->test_limit_name);
 
     /* default path is /system/etc/firmware */
-    err = request_firmware(&file_entry, chip_info->test_limit_name, private_ts->dev);
+    err = request_firmware(&file_entry, chip_info->test_limit_name, hx83112f_private_ts->dev);
     if (err < 0) {
         TPD_INFO("%s, fail in line%d error code=%d\n", __func__, __LINE__, err);
         err = THP_AFE_INSPECT_EFILE;
-        isRead_csv = false;
+        hx83112f_isread_csv = false;
         goto END_FUNC_REQ_FAIL;
     }
 
@@ -3499,25 +3518,26 @@ static int himax_parse_criteria_file(struct chip_data_hx83112f *chip_info)
     /* init the array which store original criteria and include
      * name string
      */
-    while (g_hx_inspt_crtra_name[j] != NULL) {
-        if (strlen(g_hx_inspt_crtra_name[j]) > str_max_len)
-            str_max_len = strlen(g_hx_inspt_crtra_name[j]);
+    while (hx83112f_g_hx_inspt_crtra_name[j] != NULL) {
+        if (strlen(hx83112f_g_hx_inspt_crtra_name[j]) > str_max_len)
+            str_max_len = strlen(hx83112f_g_hx_inspt_crtra_name[j]);
         j++;
     }
 
     if(result == NULL) {
-        TPD_INFO("%s: result is NULL, alloc memory.\n", __func__);
-        result = kcalloc(data_size, sizeof(char *), GFP_KERNEL);
-        if (result != NULL) {
+		TPD_INFO("%s: result is NULL, alloc memory.%d %lu result = %lu\n", __func__, \
+			data_size, sizeof(char *), (data_size * sizeof(char *)));
+		result = (char **)vzalloc(data_size * sizeof(char *));
+		if (result != NULL) {
             for (i = 0 ; i < data_size; i++) {
-                result[i] = kcalloc(str_max_len, sizeof(char), GFP_KERNEL);
+                result[i] = (char *)kcalloc(str_max_len, sizeof(char), GFP_KERNEL);
                 if (result[i] == NULL) {
                     TPD_INFO("%s: rst_arr Memory allocation falied!\n", __func__);
                     goto rst_arr_mem_alloc_failed;
                 }
             }
         } else {
-            TPD_INFO("%s: Memory allocation falied!\n", __func__);
+            TPD_INFO("%s: vzalloc result Memory allocation falied!\n", __func__);
             goto rst_mem_alloc_failed;
         }
     } else {
@@ -3537,11 +3557,11 @@ static int himax_parse_criteria_file(struct chip_data_hx83112f *chip_info)
 
     /* parse value in to result array(1-Dimensional/String) */
     size_of_result_str =
-        himax_saperate_comma(file_entry, result, data_size);
+        hx83112f_saperate_comma(file_entry, result, data_size);
 
     TPD_INFO("%s: now size_of_result_str=%d\n", __func__, size_of_result_str);
 
-    err = hx_get_crtra_by_name(chip_info, result, size_of_result_str);
+    err = hx83112f_hx_get_crtra_by_name(chip_info, result, size_of_result_str);
     if (err != THP_AFE_INSPECT_OK) {
         TPD_INFO("%s:Load criteria from file fail, go end!\n", __func__);
     }
@@ -3554,7 +3574,7 @@ rst_arr_mem_alloc_failed:
             kfree(result[i]);
         }
     }
-    kfree(result);
+	vfree(result);
 rst_mem_alloc_failed:
 END_FUNC:
     release_firmware(file_entry);
@@ -3565,26 +3585,26 @@ END_FUNC_REQ_FAIL:
 }
 
 
-static int himax_self_test_data_init(struct chip_data_hx83112f *chip_info)
+int hx83112f_self_test_data_init(struct chip_data_hx83112f *chip_info)
 {
     int ret = THP_AFE_INSPECT_OK;
     int i = 0;
 
     /* get test item and its items of criteria*/
-    HX_CRITERIA_ITEM = hx_get_size_str_arr(g_himax_inspection_mode);
-    HX_CRITERIA_SIZE = hx_get_size_str_arr(g_hx_inspt_crtra_name);
-    TPD_INFO("There is %d HX_CRITERIA_ITEM and %d HX_CRITERIA_SIZE\n",
-             HX_CRITERIA_ITEM, HX_CRITERIA_SIZE);
+	hx83112f_hx_criteria_item = hx83112f_hx_get_size_str_arr(hx83112f_g_himax_inspection_mode);
+	hx83112f_hx_criteria_size = hx83112f_hx_get_size_str_arr(hx83112f_g_hx_inspt_crtra_name);
+	TPD_INFO("There is %d hx83112f_hx_criteria_item and %d hx83112f_hx_criteria_size\n",
+             hx83112f_hx_criteria_item, hx83112f_hx_criteria_size);
 
     /* init criteria data*/
-    hx83112f_nf_inspt_crtra_flag = kzalloc(HX_CRITERIA_SIZE * sizeof(int), GFP_KERNEL);
-    hx83112f_nf_inspection_criteria = kzalloc(sizeof(int *)*HX_CRITERIA_SIZE, GFP_KERNEL);
+	hx83112f_nf_inspt_crtra_flag = kzalloc(hx83112f_hx_criteria_size * sizeof(int), GFP_KERNEL);
+	hx83112f_nf_inspection_criteria = kzalloc(sizeof(int *)*hx83112f_hx_criteria_size, GFP_KERNEL);
     if (hx83112f_nf_inspt_crtra_flag == NULL || hx83112f_nf_inspection_criteria == NULL) {
         TPD_INFO("%s: %d, Memory allocation falied!\n", __func__, __LINE__);
         return MEM_ALLOC_FAIL;
     }
 
-    for (i = 0; i < HX_CRITERIA_SIZE; i++) {
+	for (i = 0; i < hx83112f_hx_criteria_size; i++) {
         hx83112f_nf_inspection_criteria[i] = kcalloc(
                 (chip_info->hw_res->TX_NUM * chip_info->hw_res->RX_NUM), sizeof(int), GFP_KERNEL);
         if (hx83112f_nf_inspection_criteria[i] == NULL) {
@@ -3594,18 +3614,18 @@ static int himax_self_test_data_init(struct chip_data_hx83112f *chip_info)
     }
 
     /* parsing criteria from file*/
-    ret = himax_parse_criteria_file(chip_info);
+    ret = hx83112f_parse_criteria_file(chip_info);
 
     /* print get criteria string */
-    for (i = 0 ; i < HX_CRITERIA_SIZE ; i++) {
+	for (i = 0 ; i < hx83112f_hx_criteria_size ; i++) {
         if (hx83112f_nf_inspt_crtra_flag[i] != 0)
-            TPD_DEBUG("%s: [%d]There is String=%s\n", __func__, i, g_hx_inspt_crtra_name[i]);
+            TPD_DEBUG("%s: [%d]There is String=%s\n", __func__, i, hx83112f_g_hx_inspt_crtra_name[i]);
     }
 
     return ret;
 }
 
-static void hx83112f_black_screen_test(void *chip_data, char *message)
+void hx83112f_black_screen_test(void *chip_data, char *message)
 {
     int error = 0;
     int error_num = 0;
@@ -3638,50 +3658,50 @@ static void hx83112f_black_screen_test(void *chip_data, char *message)
         TPD_INFO("%s:%d g_file_name_NG kzalloc error\n", __func__, __LINE__);
         goto RET_OUT;
     }
-    g_rslt_data_len = 0;
+    hx83112f_g_rslt_data_len = 0;
 
     /*init criteria data*/
-    error = himax_self_test_data_init(chip_info);
+    error = hx83112f_self_test_data_init(chip_info);
     /*init criteria data*/
 
     /*Init Log Data */
-    g_1kind_raw_size = 5 * chip_info->hw_res->TX_NUM * chip_info->hw_res->RX_NUM * 2;
+    hx83112f_g_1kind_raw_size = 5 * chip_info->hw_res->TX_NUM * chip_info->hw_res->RX_NUM * 2;
     g_Company_info_log = kcalloc(256, sizeof(char), GFP_KERNEL);
     g_Test_list_log = kcalloc(256, sizeof(char), GFP_KERNEL);
     g_project_test_info_log = kcalloc(256, sizeof(char), GFP_KERNEL);
     hx83112f_nf_fail_write_count = 0;
-    g_file_path_OK = kcalloc(256, sizeof(char), GFP_KERNEL);
-    if (!g_file_path_OK) {
-        TPD_INFO("%s:%d g_file_path_OK kzalloc buf error\n", __func__, __LINE__);
+    hx83112f_g_file_path_OK = kcalloc(256, sizeof(char), GFP_KERNEL);
+    if (!hx83112f_g_file_path_OK) {
+        TPD_INFO("%s:%d hx83112f_g_file_path_OK kzalloc buf error\n", __func__, __LINE__);
         goto RET_OUT;
     }
-    g_file_path_NG = kcalloc(256, sizeof(char), GFP_KERNEL);
-    if (!g_file_path_NG) {
-        TPD_INFO("%s:%d g_file_path_NG kzalloc buf error\n", __func__, __LINE__);
+    hx83112f_g_file_path_NG = kcalloc(256, sizeof(char), GFP_KERNEL);
+    if (!hx83112f_g_file_path_NG) {
+        TPD_INFO("%s:%d hx83112f_g_file_path_NG kzalloc buf error\n", __func__, __LINE__);
         goto RET_OUT;
     }
 
-    if (g_rslt_data == NULL) {
-        TPD_INFO("g_rslt_data is NULL");
-        g_rslt_data = kcalloc(g_1kind_raw_size * HX_CRITERIA_ITEM,
-                              sizeof(char), GFP_KERNEL);
-        if (!g_rslt_data) {
-            TPD_INFO("%s:%d g_rslt_data kzalloc buf error\n", __func__, __LINE__);
+	if (hx83112f_g_rslt_data == NULL) {
+		TPD_INFO("%s hx83112f_g_rslt_data is NULL, will vzalloc %d %d %lu hx83112f_g_rslt_data = %lu\n", __func__, \
+			hx83112f_g_1kind_raw_size, hx83112f_hx_criteria_item, sizeof(char), (hx83112f_g_1kind_raw_size * hx83112f_hx_criteria_item * sizeof(char)));
+		hx83112f_g_rslt_data = (char *)vzalloc(hx83112f_g_1kind_raw_size * hx83112f_hx_criteria_item * sizeof(char));
+        if (!hx83112f_g_rslt_data) {
+            TPD_INFO("%s:%d hx83112f_g_rslt_data vzalloc buf error\n", __func__, __LINE__);
             goto RET_OUT;
         }
     } else {
-        memset(g_rslt_data, 0x00, g_1kind_raw_size * HX_CRITERIA_ITEM *
+        memset(hx83112f_g_rslt_data, 0x00, hx83112f_g_1kind_raw_size * hx83112f_hx_criteria_item *
                sizeof(char));
     }
     /*Init Log Data */
     hx83112f_enable_interrupt(chip_info, false);
-    himax_sense_off();
-    himax_switch_mode(HIMAX_INSPECTION_LPWUG_RAWDATA);
+    hx83112f_sense_off();
+    hx83112f_switch_mode(HIMAX_INSPECTION_LPWUG_RAWDATA);
 
     //6. LPWUG RAWDATA
     TPD_INFO("[MP_LPWUG_TEST_RAW]\n");
     do {
-        error = mpTestFunc(chip_info, HIMAX_INSPECTION_LPWUG_RAWDATA, (chip_info->hw_res->TX_NUM * chip_info->hw_res->RX_NUM) + chip_info->hw_res->TX_NUM + chip_info->hw_res->RX_NUM);
+        error = hx83112f_mpTestFunc(chip_info, HIMAX_INSPECTION_LPWUG_RAWDATA, (chip_info->hw_res->TX_NUM * chip_info->hw_res->RX_NUM) + chip_info->hw_res->TX_NUM + chip_info->hw_res->RX_NUM);
         retry_cnt--;
     } while ((error == RESULT_RETRY) && (retry_cnt > 0));
     snprintf(buf, 128, "6. MP_LPWUG_TEST_RAW: %s\n", error ? "Error" : "Ok");
@@ -3696,7 +3716,7 @@ static void hx83112f_black_screen_test(void *chip_data, char *message)
     retry_cnt = 3;
     TPD_INFO("[MP_LPWUG_TEST_NOISE]\n");
     do {
-        error = mpTestFunc(chip_info, HIMAX_INSPECTION_LPWUG_NOISE, (chip_info->hw_res->TX_NUM * chip_info->hw_res->RX_NUM) + chip_info->hw_res->TX_NUM + chip_info->hw_res->RX_NUM);
+        error = hx83112f_mpTestFunc(chip_info, HIMAX_INSPECTION_LPWUG_NOISE, (chip_info->hw_res->TX_NUM * chip_info->hw_res->RX_NUM) + chip_info->hw_res->TX_NUM + chip_info->hw_res->RX_NUM);
         retry_cnt--;
     } while ((error == RESULT_RETRY) && (retry_cnt > 0));
     snprintf(buf, 128, "7. MP_LPWUG_TEST_NOISE: %s\n", error ? "Error" : "Ok");
@@ -3710,7 +3730,7 @@ static void hx83112f_black_screen_test(void *chip_data, char *message)
     retry_cnt = 3;
     TPD_INFO("[MP_LPWUG_IDLE_TEST_RAW]\n");
     do {
-        error = mpTestFunc(chip_info, HIMAX_INSPECTION_LPWUG_IDLE_RAWDATA, (chip_info->hw_res->TX_NUM * chip_info->hw_res->RX_NUM) + chip_info->hw_res->TX_NUM + chip_info->hw_res->RX_NUM);
+        error = hx83112f_mpTestFunc(chip_info, HIMAX_INSPECTION_LPWUG_IDLE_RAWDATA, (chip_info->hw_res->TX_NUM * chip_info->hw_res->RX_NUM) + chip_info->hw_res->TX_NUM + chip_info->hw_res->RX_NUM);
         retry_cnt--;
     } while ((error == RESULT_RETRY) && (retry_cnt > 0));
     snprintf(buf, 128, "8. MP_LPWUG_IDLE_TEST_RAW: %s\n", error ? "Error" : "Ok");
@@ -3724,7 +3744,7 @@ static void hx83112f_black_screen_test(void *chip_data, char *message)
     retry_cnt = 3;
     TPD_INFO("[MP_LPWUG_IDLE_TEST_NOISE]\n");
     do {
-        error = mpTestFunc(chip_info, HIMAX_INSPECTION_LPWUG_IDLE_NOISE, (chip_info->hw_res->TX_NUM * chip_info->hw_res->RX_NUM) + chip_info->hw_res->TX_NUM + chip_info->hw_res->RX_NUM);
+        error = hx83112f_mpTestFunc(chip_info, HIMAX_INSPECTION_LPWUG_IDLE_NOISE, (chip_info->hw_res->TX_NUM * chip_info->hw_res->RX_NUM) + chip_info->hw_res->TX_NUM + chip_info->hw_res->RX_NUM);
         retry_cnt--;
     } while ((error == RESULT_RETRY) && (retry_cnt > 0));
     snprintf(buf, 128, "9. MP_LPWUG_IDLE_TEST_NOISE: %s\n", error ? "Error" : "Ok");
@@ -3747,25 +3767,26 @@ static void hx83112f_black_screen_test(void *chip_data, char *message)
 
     hx83112f_nf_fail_write_count += snprintf(g_Test_list_log + hx83112f_nf_fail_write_count, 22, "Final_result: %s\n", error_num ? "Fail" : "Pass");
     if (error) {
-        snprintf(g_file_path_NG,
+        snprintf(hx83112f_g_file_path_NG,
                  (int)(strlen(HX_GES_RSLT_OUT_PATH_NG) + strlen(g_file_name_NG) + 1),
                  "%s%s", HX_GES_RSLT_OUT_PATH_NG, g_file_name_NG);
-        hx_test_data_pop_out(chip_info, g_Test_list_log, g_Company_info_log, g_project_test_info_log, g_rslt_data, g_file_path_NG);
+        hx83112f_hx_test_data_pop_out(chip_info, g_Test_list_log, g_Company_info_log, g_project_test_info_log, hx83112f_g_rslt_data, hx83112f_g_file_path_NG);
     } else {
-        snprintf(g_file_path_OK,
+        snprintf(hx83112f_g_file_path_OK,
                  (int)(strlen(HX_GES_RSLT_OUT_PATH_OK) + strlen(g_file_name_OK) + 1),
                  "%s%s", HX_GES_RSLT_OUT_PATH_OK, g_file_name_OK);
-        hx_test_data_pop_out(chip_info, g_Test_list_log, g_Company_info_log, g_project_test_info_log, g_rslt_data, g_file_path_OK);
+        hx83112f_hx_test_data_pop_out(chip_info, g_Test_list_log, g_Company_info_log, g_project_test_info_log, hx83112f_g_rslt_data, hx83112f_g_file_path_OK);
     }
     /*Save Log Data */
 
 
     sprintf(message, "%d errors. %s", error_num, error_num ? "" : "All test passed.");
     TPD_INFO("%d errors. %s\n", error_num, error_num ? "" : "All test passed.");
+    tp_healthinfo_report(hx83112f_g_chip_info->monitor_data_v2, HEALTH_TEST_BLACKSCREEN, &error_num);
 
 RET_OUT:
     if (hx83112f_nf_inspection_criteria != NULL) {
-        for (i = 0; i < HX_CRITERIA_SIZE; i++) {
+        for (i = 0; i < hx83112f_hx_criteria_size; i++) {
             if (hx83112f_nf_inspection_criteria[i] != NULL) {
                 kfree(hx83112f_nf_inspection_criteria[i]);
                 hx83112f_nf_inspection_criteria[i] = NULL;
@@ -3782,19 +3803,19 @@ RET_OUT:
         kfree(hx83112f_nf_inspt_crtra_flag);
         hx83112f_nf_inspt_crtra_flag = NULL;
     }
-    /*
-    if (g_rslt_data) {
-        kfree(g_rslt_data);
-        g_rslt_data = NULL;
+/*
+    if (hx83112f_g_rslt_data) {
+        vfree(hx83112f_g_rslt_data);
+        hx83112f_g_rslt_data = NULL;
     }
-    */
-    if (g_file_path_OK) {
-        kfree(g_file_path_OK);
-        g_file_path_OK = NULL;
+*/
+    if (hx83112f_g_file_path_OK) {
+        kfree(hx83112f_g_file_path_OK);
+        hx83112f_g_file_path_OK = NULL;
     }
-    if (g_file_path_NG) {
-        kfree(g_file_path_NG);
-        g_file_path_NG = NULL;
+    if (hx83112f_g_file_path_NG) {
+        kfree(hx83112f_g_file_path_NG);
+        hx83112f_g_file_path_NG = NULL;
     }
     if (g_Test_list_log) {
         kfree(g_Test_list_log);
@@ -3822,7 +3843,7 @@ RET_OUT:
     }
 }
 
-int himax_chip_self_test(struct seq_file *s, struct chip_data_hx83112f *chip_info, char *g_Test_list_log)
+int hx83112f_chip_self_test(struct seq_file *s, struct chip_data_hx83112f *chip_info, char *g_Test_list_log)
 {
     int error = 0;
     int error_num = 0;
@@ -3843,7 +3864,7 @@ int himax_chip_self_test(struct seq_file *s, struct chip_data_hx83112f *chip_inf
     //1. Open Test
     TPD_INFO("[MP_OPEN_TEST_RAW]\n");
     do {
-        error = mpTestFunc(chip_info, HIMAX_INSPECTION_OPEN, (chip_info->hw_res->TX_NUM * chip_info->hw_res->RX_NUM) + chip_info->hw_res->TX_NUM + chip_info->hw_res->RX_NUM);
+        error = hx83112f_mpTestFunc(chip_info, HIMAX_INSPECTION_OPEN, (chip_info->hw_res->TX_NUM * chip_info->hw_res->RX_NUM) + chip_info->hw_res->TX_NUM + chip_info->hw_res->RX_NUM);
         retry_cnt--;
     } while ((error == RESULT_RETRY) && (retry_cnt > 0));
     hx83112f_nf_fail_write_count += snprintf(g_Test_list_log + hx83112f_nf_fail_write_count, 15, "test Item:\n");
@@ -3858,7 +3879,7 @@ int himax_chip_self_test(struct seq_file *s, struct chip_data_hx83112f *chip_inf
     retry_cnt = 3;
     TPD_INFO("[MP_MICRO_OPEN_TEST_RAW]\n");
     do {
-        error = mpTestFunc(chip_info, HIMAX_INSPECTION_MICRO_OPEN, (chip_info->hw_res->TX_NUM * chip_info->hw_res->RX_NUM) + chip_info->hw_res->TX_NUM + chip_info->hw_res->RX_NUM);
+        error = hx83112f_mpTestFunc(chip_info, HIMAX_INSPECTION_MICRO_OPEN, (chip_info->hw_res->TX_NUM * chip_info->hw_res->RX_NUM) + chip_info->hw_res->TX_NUM + chip_info->hw_res->RX_NUM);
         retry_cnt--;
     } while ((error == RESULT_RETRY) && (retry_cnt > 0));
     snprintf(buf, 128, "2. Micro Open Test: %s\n", error ? "Error" : "Ok");
@@ -3872,7 +3893,7 @@ int himax_chip_self_test(struct seq_file *s, struct chip_data_hx83112f *chip_inf
     retry_cnt = 3;
     TPD_INFO("[MP_SHORT_TEST_RAW]\n");
     do {
-        error = mpTestFunc(chip_info, HIMAX_INSPECTION_SHORT, (chip_info->hw_res->TX_NUM * chip_info->hw_res->RX_NUM) + chip_info->hw_res->TX_NUM + chip_info->hw_res->RX_NUM);
+        error = hx83112f_mpTestFunc(chip_info, HIMAX_INSPECTION_SHORT, (chip_info->hw_res->TX_NUM * chip_info->hw_res->RX_NUM) + chip_info->hw_res->TX_NUM + chip_info->hw_res->RX_NUM);
         retry_cnt--;
     } while ((error == RESULT_RETRY) && (retry_cnt > 0));
     snprintf(buf, 128, "3. Short Test: %s\n", error ? "Error" : "Ok");
@@ -3887,7 +3908,7 @@ int himax_chip_self_test(struct seq_file *s, struct chip_data_hx83112f *chip_inf
     retry_cnt = 3;
     TPD_INFO("[MP_RAW_TEST_RAW]\n");
     do {
-        error = mpTestFunc(chip_info, HIMAX_INSPECTION_RAWDATA, (chip_info->hw_res->TX_NUM * chip_info->hw_res->RX_NUM) + chip_info->hw_res->TX_NUM + chip_info->hw_res->RX_NUM);
+        error = hx83112f_mpTestFunc(chip_info, HIMAX_INSPECTION_RAWDATA, (chip_info->hw_res->TX_NUM * chip_info->hw_res->RX_NUM) + chip_info->hw_res->TX_NUM + chip_info->hw_res->RX_NUM);
         retry_cnt--;
     } while ((error == RESULT_RETRY) && (retry_cnt > 0));
     snprintf(buf, 128, "4. Raw data Test: %s\n", error ? "Error" : "Ok");
@@ -3902,7 +3923,7 @@ int himax_chip_self_test(struct seq_file *s, struct chip_data_hx83112f *chip_inf
     retry_cnt = 3;
     TPD_INFO("[MP_NOISE_TEST_RAW]\n");
     do {
-        error = mpTestFunc(chip_info, HIMAX_INSPECTION_NOISE, (chip_info->hw_res->TX_NUM * chip_info->hw_res->RX_NUM) + chip_info->hw_res->TX_NUM + chip_info->hw_res->RX_NUM);
+        error = hx83112f_mpTestFunc(chip_info, HIMAX_INSPECTION_NOISE, (chip_info->hw_res->TX_NUM * chip_info->hw_res->RX_NUM) + chip_info->hw_res->TX_NUM + chip_info->hw_res->RX_NUM);
         retry_cnt--;
     } while ((error == RESULT_RETRY) && (retry_cnt > 0));
     snprintf(buf, 128, "5. Noise Test: %s\n", error ? "Error" : "Ok");
@@ -3912,7 +3933,7 @@ int himax_chip_self_test(struct seq_file *s, struct chip_data_hx83112f *chip_inf
     if (error != 0)
         error_num++;
 
-    himax_set_N_frame(1, HIMAX_INSPECTION_NOISE);
+    hx83112f_set_N_frame(1, HIMAX_INSPECTION_NOISE);
     //himax_set_SMWP_enable(ts->SMWP_enable,suspended);
     tmp_addr[3] = 0x10;
     tmp_addr[2] = 0x00;
@@ -3922,7 +3943,7 @@ int himax_chip_self_test(struct seq_file *s, struct chip_data_hx83112f *chip_inf
     tmp_data[2] = 0x00;
     tmp_data[1] = 0x00;
     tmp_data[0] = 0x00;
-    himax_flash_write_burst(tmp_addr, tmp_data);
+    hx83112f_flash_write_burst(tmp_addr, tmp_data);
     //Enable:0x10007F10 = 0xA55AA55A
     retry_cnt = 0;
     do {
@@ -3934,19 +3955,19 @@ int himax_chip_self_test(struct seq_file *s, struct chip_data_hx83112f *chip_inf
         tmp_data[2] = 0x5A;
         tmp_data[1] = 0xA5;
         tmp_data[0] = 0x5A;
-        himax_flash_write_burst(tmp_addr, tmp_data);
+        hx83112f_flash_write_burst(tmp_addr, tmp_data);
         back_data[3] = 0XA5;
         back_data[2] = 0X5A;
         back_data[1] = 0XA5;
         back_data[0] = 0X5A;
-        himax_register_read(tmp_addr, 4, tmp_data, false);
+        hx83112f_register_read(tmp_addr, 4, tmp_data, false);
         TPD_INFO("%s: tmp_data[0] = 0x%02X, retry_cnt=%d \n", __func__, tmp_data[0], retry_cnt);
         retry_cnt++;
     } while ((tmp_data[3] != back_data[3] || tmp_data[2] != back_data[2] || tmp_data[1] != back_data[1] || tmp_data[0] != back_data[0]) && retry_cnt < HIMAX_REG_RETRY_TIMES);
 
     TPD_INFO("%s:End", __func__);
-    //himax_sense_off();
-    //himax_switch_mode(HIMAX_INSPECTION_LPWUG_RAWDATA);
+    //hx83112f_sense_off();
+    //hx83112f_switch_mode(HIMAX_INSPECTION_LPWUG_RAWDATA);
     hx83112f_nf_fail_write_count += snprintf(g_Test_list_log + hx83112f_nf_fail_write_count, 22, "Final_result: %s\n", error_num ? "Fail" : "Pass");
 RET_OUT:
     if(buf)
@@ -3980,14 +4001,14 @@ static size_t hx83112f_proc_register_read(struct file *file, char *buf, size_t l
         goto RET_OUT;
     }
 
-    if (!HX_PROC_SEND_FLAG) {
+    if (!HX83112F_HX_PROC_SEND_FLAG) {
         temp_buf = kzalloc(len, GFP_KERNEL);
 
-        TPD_INFO("himax_register_show: %02X, %02X, %02X, %02X\n", register_command[3], register_command[2], register_command[1], register_command[0]);
+        TPD_INFO("himax_register_show: %02X, %02X, %02X, %02X\n", hx83112f_register_command[3], hx83112f_register_command[2], hx83112f_register_command[1], hx83112f_register_command[0]);
 
-        himax_register_read(register_command, max_bus_size, data, cfg_flag);
+        hx83112f_register_read(hx83112f_register_command, max_bus_size, data, hx83112f_cfg_flag);
 
-        ret += snprintf(temp_buf + ret, len - ret, "command:  %02X, %02X, %02X, %02X\n", register_command[3], register_command[2], register_command[1], register_command[0]);
+        ret += snprintf(temp_buf + ret, len - ret, "command:  %02X, %02X, %02X, %02X\n", hx83112f_register_command[3], hx83112f_register_command[2], hx83112f_register_command[1], hx83112f_register_command[0]);
 
         for (loop_i = 0; loop_i < max_bus_size; loop_i++) {
             ret += snprintf(temp_buf + ret, len - ret, "0x%2.2X ", data[loop_i]);
@@ -4000,9 +4021,9 @@ static size_t hx83112f_proc_register_read(struct file *file, char *buf, size_t l
             TPD_INFO("%s, here:%d\n", __func__, __LINE__);
         }
         kfree(temp_buf);
-        HX_PROC_SEND_FLAG = 1;
+        HX83112F_HX_PROC_SEND_FLAG = 1;
     } else {
-        HX_PROC_SEND_FLAG = 0;
+        HX83112F_HX_PROC_SEND_FLAG = 0;
     }
 RET_OUT:
     if (data)
@@ -4058,49 +4079,49 @@ static size_t hx83112f_proc_register_write(struct file *file, const char *buff, 
         if (buf[0] == 'r') {
             if (buf[3] == 'F' && buf[4] == 'E' && length == 4) {
                 length = length - base;
-                cfg_flag = true;
+                hx83112f_cfg_flag = true;
                 memcpy(buf_tmp, data_str + base + 1, length);
             } else {
-                cfg_flag = false;
+                hx83112f_cfg_flag = false;
                 memcpy(buf_tmp, data_str + 1, length);
             }
 
-            byte_length = length / 2;
+            hx83112f_byte_length = length / 2;
             if (!kstrtoul(buf_tmp, 16, &result)) {
-                for (loop_i = 0 ; loop_i < byte_length ; loop_i++) {
-                    register_command[loop_i] = (uint8_t)(result >> loop_i * 8);
+                for (loop_i = 0 ; loop_i < hx83112f_byte_length ; loop_i++) {
+                    hx83112f_register_command[loop_i] = (uint8_t)(result >> loop_i * 8);
                 }
             }
         } else if (buf[0] == 'w') {
             if (buf[3] == 'F' && buf[4] == 'E') {
-                cfg_flag = true;
+                hx83112f_cfg_flag = true;
                 memcpy(buf_tmp, buf + base + 3, length);
             } else {
-                cfg_flag = false;
+                hx83112f_cfg_flag = false;
                 memcpy(buf_tmp, buf + 3, length);
             }
             if (count < 3) {
-                byte_length = length / 2;
+                hx83112f_byte_length = length / 2;
                 if (!kstrtoul(buf_tmp, 16, &result)) {//command
-                    for (loop_i = 0 ; loop_i < byte_length ; loop_i++) {
-                        register_command[loop_i] = (uint8_t)(result >> loop_i * 8);
+                    for (loop_i = 0 ; loop_i < hx83112f_byte_length ; loop_i++) {
+                        hx83112f_register_command[loop_i] = (uint8_t)(result >> loop_i * 8);
                     }
                 }
                 if (!kstrtoul(data_str + 1, 16, &result)) { //data
-                    for (loop_i = 0 ; loop_i < byte_length ; loop_i++) {
+                    for (loop_i = 0 ; loop_i < hx83112f_byte_length ; loop_i++) {
                         w_data[loop_i] = (uint8_t)(result >> loop_i * 8);
                     }
                 }
-                himax_register_write(register_command, byte_length, w_data, cfg_flag);
+                hx83112f_register_write(hx83112f_register_command, hx83112f_byte_length, w_data, hx83112f_cfg_flag);
             } else {
-                byte_length = x_pos[1] - x_pos[0] - 2;
+                hx83112f_byte_length = x_pos[1] - x_pos[0] - 2;
                 for (loop_i = 0; loop_i < count; loop_i++) {//parsing addr after 'x'
-                    memcpy(buf_tmp, buf + x_pos[loop_i] + 1, byte_length);
+                    memcpy(buf_tmp, buf + x_pos[loop_i] + 1, hx83112f_byte_length);
                     //TPD_INFO("%s: buf_tmp = %s\n", __func__,buf_tmp);
                     if (!kstrtoul(buf_tmp, 16, &result)) {
                         if (loop_i == 0) {
-                            register_command[loop_i] = (uint8_t)(result);
-                            //TPD_INFO("%s: register_command = %X\n", __func__,register_command[0]);
+                            hx83112f_register_command[loop_i] = (uint8_t)(result);
+                            //TPD_INFO("%s: hx83112f_register_command = %X\n", __func__,hx83112f_register_command[0]);
                         } else {
                             w_data[loop_i - 1] = (uint8_t)(result);
                             //TPD_INFO("%s: w_data[%d] = %2X\n", __func__,loop_i - 1,w_data[loop_i - 1]);
@@ -4108,8 +4129,8 @@ static size_t hx83112f_proc_register_write(struct file *file, const char *buff, 
                     }
                 }
 
-                byte_length = count - 1;
-                himax_register_write(register_command, byte_length, &w_data[0], cfg_flag);
+                hx83112f_byte_length = count - 1;
+                hx83112f_register_write(hx83112f_register_command, hx83112f_byte_length, &w_data[0], hx83112f_cfg_flag);
             }
         } else {
             return len;
@@ -4119,7 +4140,7 @@ static size_t hx83112f_proc_register_write(struct file *file, const char *buff, 
     return len;
 }
 
-void himax_return_event_stack(void)
+void hx83112f_return_event_stack(void)
 {
     int retry = 20;
     uint8_t tmp_addr[4];
@@ -4136,9 +4157,9 @@ void himax_return_event_stack(void)
         tmp_data[2] = 0x00;
         tmp_data[1] = 0x00;
         tmp_data[0] = 0x00;
-        himax_flash_write_burst(tmp_addr, tmp_data);
+        hx83112f_flash_write_burst(tmp_addr, tmp_data);
 
-        himax_register_read(tmp_addr, 4, tmp_data, false);
+        hx83112f_register_read(tmp_addr, 4, tmp_data, false);
         retry--;
         //msleep(10);
 
@@ -4149,20 +4170,20 @@ void himax_return_event_stack(void)
 }
 /*IC_BASED_END*/
 
-int himax_write_read_reg(uint8_t *tmp_addr, uint8_t *tmp_data, uint8_t hb, uint8_t lb)
+int hx83112f_write_read_reg(uint8_t *tmp_addr, uint8_t *tmp_data, uint8_t hb, uint8_t lb)
 {
     int cnt = 0;
 
     do {
-        himax_flash_write_burst(tmp_addr, tmp_data);
+        hx83112f_flash_write_burst(tmp_addr, tmp_data);
 
         msleep(20);
-        himax_register_read(tmp_addr, 4, tmp_data, false);
+        hx83112f_register_read(tmp_addr, 4, tmp_data, false);
         TPD_INFO("%s:Now tmp_data[0] = 0x%02X, [1] = 0x%02X, [2] = 0x%02X, [3] = 0x%02X\n", __func__, tmp_data[0], tmp_data[1], tmp_data[2], tmp_data[3]);
     } while ((tmp_data[1] != hb && tmp_data[0] != lb) && cnt++ < 100);
 
     if (cnt >= 99) {
-        TPD_INFO("himax_write_read_reg ERR Now register 0x%08X : high byte = 0x%02X, low byte = 0x%02X\n", tmp_addr[3], tmp_data[1], tmp_data[0]);
+        TPD_INFO("hx83112f_write_read_reg ERR Now register 0x%08X : high byte = 0x%02X, low byte = 0x%02X\n", tmp_addr[3], tmp_data[1], tmp_data[0]);
         return -1;
     }
 
@@ -4170,7 +4191,7 @@ int himax_write_read_reg(uint8_t *tmp_addr, uint8_t *tmp_data, uint8_t hb, uint8
     return NO_ERR;
 }
 
-void himax_get_DSRAM_data(uint8_t *info_data, uint8_t x_num, uint8_t y_num)
+void hx83112f_get_DSRAM_data(uint8_t *info_data, uint8_t x_num, uint8_t y_num)
 {
     int i = 0;
     //int cnt = 0;
@@ -4204,7 +4225,7 @@ void himax_get_DSRAM_data(uint8_t *info_data, uint8_t x_num, uint8_t y_num)
     tmp_data[2] = 0x00;
     tmp_data[1] = 0x5A;
     tmp_data[0] = 0xA5;
-    fw_run_flag = himax_write_read_reg(tmp_addr, tmp_data, 0xA5, 0x5A);
+    fw_run_flag = hx83112f_write_read_reg(tmp_addr, tmp_data, 0xA5, 0x5A);
     if (fw_run_flag < 0) {
         TPD_INFO("%s Data NOT ready => bypass \n", __func__);
         kfree(temp_info_data);
@@ -4226,11 +4247,11 @@ void himax_get_DSRAM_data(uint8_t *info_data, uint8_t x_num, uint8_t y_num)
 
     for (i = 0; i < (total_read_times); i++) {
         if (total_size_temp >= max_i2c_size) {
-            himax_register_read(tmp_addr, max_i2c_size, &temp_info_data[i * max_i2c_size], false);
+            hx83112f_register_read(tmp_addr, max_i2c_size, &temp_info_data[i * max_i2c_size], false);
             total_size_temp = total_size_temp - max_i2c_size;
         } else {
             //TPD_INFO("last total_size_temp=%d\n",total_size_temp);
-            himax_register_read(tmp_addr, total_size_temp % max_i2c_size,
+            hx83112f_register_read(tmp_addr, total_size_temp % max_i2c_size,
                                 &temp_info_data[i * max_i2c_size], false);
         }
 
@@ -4240,8 +4261,8 @@ void himax_get_DSRAM_data(uint8_t *info_data, uint8_t x_num, uint8_t y_num)
     }
 
     /* 4. FW stop outputing */
-    //TPD_INFO("DSRAM_Flag=%d\n",DSRAM_Flag);
-    if (DSRAM_Flag == false) {
+    //TPD_INFO("HX83112F_DSRAM_Flag=%d\n",HX83112F_DSRAM_Flag);
+    if (HX83112F_DSRAM_Flag == false) {
         //TPD_INFO("Return to Event Stack!\n");
         tmp_addr[3] = 0x10;
         tmp_addr[2] = 0x00;
@@ -4251,7 +4272,7 @@ void himax_get_DSRAM_data(uint8_t *info_data, uint8_t x_num, uint8_t y_num)
         tmp_data[2] = 0x00;
         tmp_data[1] = 0x00;
         tmp_data[0] = 0x00;
-        himax_flash_write_burst(tmp_addr, tmp_data);
+        hx83112f_flash_write_burst(tmp_addr, tmp_data);
     } else {
         //TPD_INFO("Continue to SRAM!\n");
         tmp_addr[3] = 0x10;
@@ -4262,7 +4283,7 @@ void himax_get_DSRAM_data(uint8_t *info_data, uint8_t x_num, uint8_t y_num)
         tmp_data[2] = 0x22;
         tmp_data[1] = 0x33;
         tmp_data[0] = 0x44;
-        himax_flash_write_burst(tmp_addr, tmp_data);
+        hx83112f_flash_write_burst(tmp_addr, tmp_data);
     }
 
     /* 5. Data Checksum Check */
@@ -4285,7 +4306,7 @@ void himax_get_DSRAM_data(uint8_t *info_data, uint8_t x_num, uint8_t y_num)
     kfree(temp_info_data);
 }
 
-void himax_ts_diag_func(struct chip_data_hx83112f *chip_info, int32_t *mutual_data)
+void hx83112f_ts_diag_func(struct chip_data_hx83112f *chip_info, int32_t *mutual_data)
 {
     int i = 0;
     int j = 0;
@@ -4300,17 +4321,17 @@ void himax_ts_diag_func(struct chip_data_hx83112f *chip_info, int32_t *mutual_da
 
     memset(write_buf, '\0', sizeof(write_buf));
 
-    dsram_type = g_diag_command / 10;
+    dsram_type = hx83112f_g_diag_command / 10;
 
-    TPD_INFO("%s:Entering g_diag_command=%d\n!", __func__, g_diag_command);
+    TPD_INFO("%s:Entering hx83112f_g_diag_command=%d\n!", __func__, hx83112f_g_diag_command);
 
     if (dsram_type == 8) {
         dsram_type = 1;
         TPD_INFO("%s Sorting Mode run sram type1 ! \n", __func__);
     }
 
-    himax_burst_enable(1);
-    himax_get_DSRAM_data(info_data, chip_info->hw_res->RX_NUM, chip_info->hw_res->TX_NUM);
+    hx83112f_burst_enable(1);
+    hx83112f_get_DSRAM_data(info_data, chip_info->hw_res->RX_NUM, chip_info->hw_res->TX_NUM);
 
     index = 0;
     for (i = 0; i < chip_info->hw_res->TX_NUM; i++) {
@@ -4322,18 +4343,18 @@ void himax_ts_diag_func(struct chip_data_hx83112f *chip_info, int32_t *mutual_da
     }
 }
 
-void diag_parse_raw_data(struct himax_report_data *hx_touch_data, int mul_num, int self_num, uint8_t diag_cmd, int32_t *mutual_data, int32_t *self_data)
+void hx83112f_diag_parse_raw_data(struct hx83112f_report_data *hx83112f_hx_touch_data, int mul_num, int self_num, uint8_t diag_cmd, int32_t *mutual_data, int32_t *self_data)
 {
     int RawDataLen_word;
     int index = 0;
     int temp1, temp2, i;
 
-    if (hx_touch_data->hx_rawdata_buf[0] == 0x3A
-        && hx_touch_data->hx_rawdata_buf[1] == 0xA3
-        && hx_touch_data->hx_rawdata_buf[2] > 0
-        && hx_touch_data->hx_rawdata_buf[3] == diag_cmd) {
-        RawDataLen_word = hx_touch_data->rawdata_size / 2;
-        index = (hx_touch_data->hx_rawdata_buf[2] - 1) * RawDataLen_word;
+    if (hx83112f_hx_touch_data->hx_rawdata_buf[0] == 0x3A
+        && hx83112f_hx_touch_data->hx_rawdata_buf[1] == 0xA3
+        && hx83112f_hx_touch_data->hx_rawdata_buf[2] > 0
+        && hx83112f_hx_touch_data->hx_rawdata_buf[3] == diag_cmd) {
+        RawDataLen_word = hx83112f_hx_touch_data->rawdata_size / 2;
+        index = (hx83112f_hx_touch_data->hx_rawdata_buf[2] - 1) * RawDataLen_word;
         //TPD_INFO("Header[%d]: %x, %x, %x, %x, mutual: %d, self: %d\n", index, buf[56], buf[57], buf[58], buf[59], mul_num, self_num);
         //TPD_INFO("RawDataLen=%d , RawDataLen_word=%d , hx_touch_info_size=%d\n", RawDataLen, RawDataLen_word, hx_touch_info_size);
         for (i = 0; i < RawDataLen_word; i++) {
@@ -4341,7 +4362,7 @@ void diag_parse_raw_data(struct himax_report_data *hx_touch_data, int mul_num, i
 
             if (temp1 < mul_num) {
                 //mutual
-                mutual_data[index + i] = ((int8_t)hx_touch_data->hx_rawdata_buf[i * 2 + 4 + 1]) * 256 + hx_touch_data->hx_rawdata_buf[i * 2 + 4]; /* 4: RawData Header, 1:HSB  */
+                mutual_data[index + i] = ((int8_t)hx83112f_hx_touch_data->hx_rawdata_buf[i * 2 + 4 + 1]) * 256 + hx83112f_hx_touch_data->hx_rawdata_buf[i * 2 + 4]; /* 4: RawData Header, 1:HSB  */
             } else {
                 //self
                 temp1 = i + index;
@@ -4350,22 +4371,22 @@ void diag_parse_raw_data(struct himax_report_data *hx_touch_data, int mul_num, i
                 if (temp1 >= temp2) {
                     break;
                 }
-                self_data[i + index - mul_num] = (((int8_t)hx_touch_data->hx_rawdata_buf[i * 2 + 4 + 1]) << 8) | hx_touch_data->hx_rawdata_buf[i * 2 + 4]; /* 4: RawData Header */
-                //self_data[i+index-mul_num+1] = hx_touch_data->hx_rawdata_buf[i*2 + 4 + 1];
+                self_data[i + index - mul_num] = (((int8_t)hx83112f_hx_touch_data->hx_rawdata_buf[i * 2 + 4 + 1]) << 8) | hx83112f_hx_touch_data->hx_rawdata_buf[i * 2 + 4]; /* 4: RawData Header */
+                //self_data[i+index-mul_num+1] = hx83112f_hx_touch_data->hx_rawdata_buf[i*2 + 4 + 1];
             }
         }
     }
 
 }
 
-bool diag_check_sum(struct himax_report_data *hx_touch_data) /*return checksum value  */
+bool hx83112f_diag_check_sum(struct hx83112f_report_data *hx83112f_hx_touch_data) /*return checksum value  */
 {
     uint16_t check_sum_cal = 0;
     int i;
 
     //Check 128th byte CRC
-    for (i = 0, check_sum_cal = 0; i < (hx_touch_data->touch_all_size - hx_touch_data->touch_info_size); i = i + 2) {
-        check_sum_cal += (hx_touch_data->hx_rawdata_buf[i + 1] * 256 + hx_touch_data->hx_rawdata_buf[i]);
+    for (i = 0, check_sum_cal = 0; i < (hx83112f_hx_touch_data->touch_all_size - hx83112f_hx_touch_data->touch_info_size); i = i + 2) {
+        check_sum_cal += (hx83112f_hx_touch_data->hx_rawdata_buf[i + 1] * 256 + hx83112f_hx_touch_data->hx_rawdata_buf[i]);
     }
     if (check_sum_cal % 0x10000 != 0) {
         TPD_INFO("%s fail=%2X \n", __func__, check_sum_cal);
@@ -4401,53 +4422,53 @@ static size_t hx83112f_proc_diag_write(struct file *file, const char *buff, size
     }
 
     if (messages[1] == 0x0A) {
-        g_diag_command = messages[0] - '0';
+        hx83112f_g_diag_command = messages[0] - '0';
     } else {
-        g_diag_command = (messages[0] - '0') * 10 + (messages[1] - '0');
+        hx83112f_g_diag_command = (messages[0] - '0') * 10 + (messages[1] - '0');
     }
 
-    storage_type = g_diag_command / 10;
-    rawdata_type = g_diag_command % 10;
+    storage_type = hx83112f_g_diag_command / 10;
+    rawdata_type = hx83112f_g_diag_command % 10;
 
     TPD_INFO(" messages       = %s\n"
-             " g_diag_command = 0x%x\n"
+             " hx83112f_g_diag_command = 0x%x\n"
              " storage_type   = 0x%x\n"
              " rawdata_type   = 0x%x\n",
-             messages, g_diag_command, storage_type, rawdata_type);
+             messages, hx83112f_g_diag_command, storage_type, rawdata_type);
 
-    if (g_diag_command > 0 && rawdata_type == 0) {
-        TPD_INFO("[Himax]g_diag_command = 0x%x, storage_type=%d, rawdata_type=%d! Maybe no support!\n", g_diag_command, storage_type, rawdata_type);
-        g_diag_command = 0x00;
+    if (hx83112f_g_diag_command > 0 && rawdata_type == 0) {
+        TPD_INFO("[Himax]hx83112f_g_diag_command = 0x%x, storage_type=%d, rawdata_type=%d! Maybe no support!\n", hx83112f_g_diag_command, storage_type, rawdata_type);
+        hx83112f_g_diag_command = 0x00;
     } else {
-        TPD_INFO("[Himax]g_diag_command = 0x%x, storage_type=%d, rawdata_type=%d\n", g_diag_command, storage_type, rawdata_type);
+        TPD_INFO("[Himax]hx83112f_g_diag_command = 0x%x, storage_type=%d, rawdata_type=%d\n", hx83112f_g_diag_command, storage_type, rawdata_type);
     }
 
     if (storage_type == 0 && rawdata_type > 0 && rawdata_type < 8) {
         TPD_INFO("%s, common\n", __func__);
-        if (DSRAM_Flag) {
+        if (HX83112F_DSRAM_Flag) {
             //(1) Clear DSRAM flag
-            DSRAM_Flag = false;
+            HX83112F_DSRAM_Flag = false;
             //(2) Enable ISR
             // enable_irq(chip_info->hx_irq);
             hx83112f_enable_interrupt(chip_info, true);
             //(3) FW leave sram and return to event stack
-            himax_return_event_stack();
+            hx83112f_return_event_stack();
         }
 
-        command[0] = g_diag_command;
-        himax_diag_register_set(command[0]);
+        command[0] = hx83112f_g_diag_command;
+        hx83112f_diag_register_set(command[0]);
     } else if (storage_type > 0 && storage_type < 8 && rawdata_type > 0 && rawdata_type < 8) {
         TPD_INFO("%s, dsram\n", __func__);
 
         //0. set diag flag
-        if (DSRAM_Flag) {
+        if (HX83112F_DSRAM_Flag) {
             //(1) Clear DSRAM flag
-            DSRAM_Flag = false;
+            HX83112F_DSRAM_Flag = false;
             //(2) Enable ISR
             // enable_irq(chip_info->hx_irq);
             hx83112f_enable_interrupt(chip_info, true);
             //(3) FW leave sram and return to event stack
-            himax_return_event_stack();
+            hx83112f_return_event_stack();
         }
 
         switch(rawdata_type) {
@@ -4468,25 +4489,25 @@ static size_t hx83112f_proc_diag_write(struct file *file, const char *buff, size
             TPD_INFO("%s: Sram no support this type !\n", __func__);
             break;
         }
-        himax_diag_register_set(command[0]);
+        hx83112f_diag_register_set(command[0]);
         TPD_INFO("%s: Start get raw data in DSRAM\n", __func__);
         //1. Disable ISR
         hx83112f_enable_interrupt(chip_info, false);
 
         //2. Set DSRAM flag
-        DSRAM_Flag = true;
+        HX83112F_DSRAM_Flag = true;
     } else {
         //set diag flag
-        if (DSRAM_Flag) {
+        if (HX83112F_DSRAM_Flag) {
             TPD_INFO("return and cancel sram thread!\n");
             //(1) Clear DSRAM flag
-            DSRAM_Flag = false;
-            himax_return_event_stack();
+            HX83112F_DSRAM_Flag = false;
+            hx83112f_return_event_stack();
         }
         command[0] = 0x00;
-        g_diag_command = 0x00;
-        himax_diag_register_set(command[0]);
-        TPD_INFO("return to normal g_diag_command = 0x%x\n", g_diag_command);
+        hx83112f_g_diag_command = 0x00;
+        hx83112f_diag_register_set(command[0]);
+        TPD_INFO("return to normal hx83112f_g_diag_command = 0x%x\n", hx83112f_g_diag_command);
     }
     return len;
 }
@@ -4507,14 +4528,14 @@ static size_t hx83112f_proc_diag_read(struct file *file, char *buff, size_t len,
     struct touchpanel_data *ts = PDE_DATA(file_inode(file));
     struct chip_data_hx83112f *chip_info = (struct chip_data_hx83112f *)ts->chip_data;
 
-    if (!HX_PROC_SEND_FLAG) {
+    if (!HX83112F_HX_PROC_SEND_FLAG) {
         temp_buf = kzalloc(len, GFP_KERNEL);
         if (!temp_buf) {
             goto RET_OUT;
         }
 
-        dsram_type = g_diag_command / 10;
-        data_type = g_diag_command % 10;
+        dsram_type = hx83112f_g_diag_command / 10;
+        data_type = hx83112f_g_diag_command % 10;
 
         mutual_num = chip_info->hw_res->TX_NUM * chip_info->hw_res->RX_NUM;
         self_num = chip_info->hw_res->TX_NUM + chip_info->hw_res->RX_NUM; //don't add KEY_COUNT
@@ -4524,19 +4545,19 @@ static size_t hx83112f_proc_diag_read(struct file *file, char *buff, size_t len,
         // start to show out the raw data in adb shell
         if ((data_type >= 1 && data_type <= 7)) {
             if (dsram_type > 0)
-                himax_ts_diag_func(chip_info, hx_touch_data->diag_mutual);
+                hx83112f_ts_diag_func(chip_info, hx83112f_hx_touch_data->diag_mutual);
 
             for (j = 0; j < chip_info->hw_res->RX_NUM ; j++) {
                 for (i = 0; i < chip_info->hw_res->TX_NUM; i++) {
                     k = ((mutual_num - j) - chip_info->hw_res->RX_NUM * i) - 1;
-                    ret += snprintf(temp_buf + ret, len - ret, "%6d", hx_touch_data->diag_mutual[k]);
+                    ret += snprintf(temp_buf + ret, len - ret, "%6d", hx83112f_hx_touch_data->diag_mutual[k]);
                 }
-                ret += snprintf(temp_buf + ret, len - ret, " %6d\n", diag_self[j]);
+                ret += snprintf(temp_buf + ret, len - ret, " %6d\n", hx83112f_diag_self[j]);
             }
 
             ret += snprintf(temp_buf + ret, len - ret, "\n");
             for (i = 0; i < chip_info->hw_res->TX_NUM; i++) {
-                ret += snprintf(temp_buf + ret, len - ret, "%6d", diag_self[i]);
+                ret += snprintf(temp_buf + ret, len - ret, "%6d", hx83112f_diag_self[i]);
             }
         }
 
@@ -4544,48 +4565,48 @@ static size_t hx83112f_proc_diag_read(struct file *file, char *buff, size_t len,
         ret += snprintf(temp_buf + ret, len - ret, "ChannelEnd");
         ret += snprintf(temp_buf + ret, len - ret, "\n");
 
-        //if ((g_diag_command >= 1 && g_diag_command <= 7) || dsram_type > 0)
+        //if ((hx83112f_g_diag_command >= 1 && hx83112f_g_diag_command <= 7) || dsram_type > 0)
         {
             /* print Mutual/Slef Maximum and Minimum */
             //himax_get_mutual_edge();
             for (i = 0; i < (chip_info->hw_res->TX_NUM * chip_info->hw_res->RX_NUM); i++) {
-                if (hx_touch_data->diag_mutual[i] > g_max_mutual) {
-                    g_max_mutual = hx_touch_data->diag_mutual[i];
+                if (hx83112f_hx_touch_data->diag_mutual[i] > hx83112f_g_max_mutual) {
+                    hx83112f_g_max_mutual = hx83112f_hx_touch_data->diag_mutual[i];
                 }
-                if (hx_touch_data->diag_mutual[i] < g_min_mutual) {
-                    g_min_mutual = hx_touch_data->diag_mutual[i];
+                if (hx83112f_hx_touch_data->diag_mutual[i] < hx83112f_g_min_mutual) {
+                    hx83112f_g_min_mutual = hx83112f_hx_touch_data->diag_mutual[i];
                 }
             }
 
             //himax_get_self_edge();
             for (i = 0; i < (chip_info->hw_res->TX_NUM + chip_info->hw_res->RX_NUM); i++) {
-                if (diag_self[i] > g_max_self) {
-                    g_max_self = diag_self[i];
+                if (hx83112f_diag_self[i] > hx83112f_g_max_self) {
+                    hx83112f_g_max_self = hx83112f_diag_self[i];
                 }
-                if (diag_self[i] < g_min_self) {
-                    g_min_self = diag_self[i];
+                if (hx83112f_diag_self[i] < hx83112f_g_min_self) {
+                    hx83112f_g_min_self = hx83112f_diag_self[i];
                 }
             }
 
-            ret += snprintf(temp_buf + ret, len - ret, "Mutual Max:%3d, Min:%3d\n", g_max_mutual, g_min_mutual);
-            ret += snprintf(temp_buf + ret, len - ret, "Self Max:%3d, Min:%3d\n", g_max_self, g_min_self);
+            ret += snprintf(temp_buf + ret, len - ret, "Mutual Max:%3d, Min:%3d\n", hx83112f_g_max_mutual, hx83112f_g_min_mutual);
+            ret += snprintf(temp_buf + ret, len - ret, "Self Max:%3d, Min:%3d\n", hx83112f_g_max_self, hx83112f_g_min_self);
 
             /* recovery status after print*/
-            g_max_mutual = 0;
-            g_min_mutual = 0xFFFF;
-            g_max_self = 0;
-            g_min_self = 0xFFFF;
+            hx83112f_g_max_mutual = 0;
+            hx83112f_g_min_mutual = 0xFFFF;
+            hx83112f_g_max_self = 0;
+            hx83112f_g_min_self = 0xFFFF;
         }
         if (copy_to_user(buff, temp_buf, len)) {
             TPD_INFO("%s, here:%d\n", __func__, __LINE__);
         }
-        HX_PROC_SEND_FLAG = 1;
+        HX83112F_HX_PROC_SEND_FLAG = 1;
 RET_OUT:
         if(temp_buf) {
             kfree(temp_buf);
         }
     } else {
-        HX_PROC_SEND_FLAG = 0;
+        HX83112F_HX_PROC_SEND_FLAG = 0;
     }
 
     return ret;
@@ -4600,7 +4621,7 @@ static int hx83112f_configuration_init(struct chip_data_hx83112f *chip_info, boo
     uint8_t back_data[4] = {0};
     TPD_INFO("%s, configuration init = %d\n", __func__, config);
     if (config) {
-        g_zero_event_count = 0;
+        hx83112f_g_zero_event_count = 0;
         tmp_addr[3] = 0x10;
         tmp_addr[2] = 0x00;
         tmp_addr[1] = 0x7F;
@@ -4609,7 +4630,7 @@ static int hx83112f_configuration_init(struct chip_data_hx83112f *chip_info, boo
         tmp_data[2] = 0x00;
         tmp_data[1] = 0x00;
         tmp_data[0] = 0x00;
-        himax_flash_write_burst(tmp_addr, tmp_data);
+        hx83112f_flash_write_burst(tmp_addr, tmp_data);
         do {
             tmp_addr[3] = 0x10;
             tmp_addr[2] = 0x00;
@@ -4619,12 +4640,12 @@ static int hx83112f_configuration_init(struct chip_data_hx83112f *chip_info, boo
             tmp_data[2] = 0x00;
             tmp_data[1] = 0x00;
             tmp_data[0] = 0x00;
-            himax_flash_write_burst(tmp_addr, tmp_data);
+            hx83112f_flash_write_burst(tmp_addr, tmp_data);
             back_data[3] = 0x00;
             back_data[2] = 0x00;
             back_data[1] = 0x00;
             back_data[0] = 0x00;
-            himax_register_read(tmp_addr, 4, tmp_data, false);
+            hx83112f_register_read(tmp_addr, 4, tmp_data, false);
             TPD_INFO("%s: tmp_data[0] = 0x%02X, retry_cnt=%d \n", __func__, tmp_data[0], retry_cnt);
             retry_cnt++;
         } while ((tmp_data[3] != back_data[3] || tmp_data[2] != back_data[2] || tmp_data[1] != back_data[1] || tmp_data[0] != back_data[0]) && retry_cnt < HIMAX_REG_RETRY_TIMES);
@@ -4637,15 +4658,15 @@ static int hx83112f_configuration_init(struct chip_data_hx83112f *chip_info, boo
         tmp_data[2] = 0x5A;
         tmp_data[1] = 0xA5;
         tmp_data[0] = 0x5A;
-        hx_chk_write_register(tmp_addr, tmp_data);
+        hx83112f_hx_chk_write_register(tmp_addr, tmp_data);
     }
     return ret;
 }
 
-int himax_ic_reset(struct chip_data_hx83112f *chip_info, uint8_t loadconfig, uint8_t int_off)
+int hx83112f_ic_reset(struct chip_data_hx83112f *chip_info, uint8_t loadconfig, uint8_t int_off)
 {
     int ret = 0;
-    HX_HW_RESET_ACTIVATE = 1;
+	hx83112f_hx_hw_reset_activate = 1;
 
     TPD_INFO("%s, status: loadconfig=%d, int_off=%d\n", __func__, loadconfig, int_off);
 
@@ -4662,7 +4683,7 @@ int himax_ic_reset(struct chip_data_hx83112f *chip_info, uint8_t loadconfig, uin
         hx83112f_resetgpio_set(chip_info->hw_res, false); // reset gpio
         hx83112f_resetgpio_set(chip_info->hw_res, true); // reset gpio
 #else
-        himax_mcu_sys_reset();
+        hx83112f_mcu_sys_reset();
 #endif
         himax_hx83112f_reload_to_active();//morgen add
         if (loadconfig) {
@@ -4703,13 +4724,13 @@ static size_t hx83112f_proc_reset_write(struct file *file, const char *buff,
         return -EFAULT;
     }
     if (buf_tmp[0] == '1')
-        himax_ic_reset(chip_info, false, false);
+        hx83112f_ic_reset(chip_info, false, false);
     else if (buf_tmp[0] == '2')
-        himax_ic_reset(chip_info, false, true);
+        hx83112f_ic_reset(chip_info, false, true);
     else if (buf_tmp[0] == '3')
-        himax_ic_reset(chip_info, true, false);
+        hx83112f_ic_reset(chip_info, true, false);
     else if (buf_tmp[0] == '4')
-        himax_ic_reset(chip_info, true, true);
+        hx83112f_ic_reset(chip_info, true, true);
 
 
     return len;
@@ -4730,14 +4751,14 @@ static size_t hx83112f_proc_sense_on_off_write(struct file *file, const char *bu
     }
 
     if (buf[0] == '0') {
-        himax_sense_off();
+        hx83112f_sense_off();
         TPD_INFO("Sense off \n");
     } else if(buf[0] == '1') {
         if (buf[1] == 's') {
-            himax_sense_on(0x00);
+            hx83112f_sense_on(0x00);
             TPD_INFO("Sense on re-map on, run sram \n");
         } else {
-            himax_sense_on(0x01);
+            hx83112f_sense_on(0x01);
             TPD_INFO("Sense on re-map off, run flash \n");
         }
     } else {
@@ -4752,30 +4773,30 @@ static size_t hx83112f_proc_vendor_read(struct file *file, char *buf,
     int ret = 0;
     char *temp_buf;
 
-    if (!HX_PROC_SEND_FLAG) {
+    if (!HX83112F_HX_PROC_SEND_FLAG) {
         temp_buf = kzalloc(len, GFP_KERNEL);
 
-        hx83112f_enable_interrupt(g_chip_info, false);
-        himax_read_FW_ver();
-        himax_sense_on(0x00);
-        hx83112f_enable_interrupt(g_chip_info, true);
+        hx83112f_enable_interrupt(hx83112f_g_chip_info, false);
+        hx83112f_read_FW_ver();
+        hx83112f_sense_on(0x00);
+        hx83112f_enable_interrupt(hx83112f_g_chip_info, true);
 
-        ret += snprintf(temp_buf + ret, len - ret, "FW_ID:0x%08X\n", g_chip_info->fw_id);
-        ret += snprintf(temp_buf + ret, len - ret, "FW_VER:0x%04X\n", g_chip_info->fw_ver);
-        ret += snprintf(temp_buf + ret, len - ret, "TOUCH_VER:0x%02X\n", g_chip_info->touch_ver);
+        ret += snprintf(temp_buf + ret, len - ret, "FW_ID:0x%08X\n", hx83112f_g_chip_info->fw_id);
+        ret += snprintf(temp_buf + ret, len - ret, "FW_VER:0x%04X\n", hx83112f_g_chip_info->fw_ver);
+        ret += snprintf(temp_buf + ret, len - ret, "TOUCH_VER:0x%02X\n", hx83112f_g_chip_info->touch_ver);
         ret += snprintf(temp_buf + ret, len - ret, "DRIVER_VER:%s\n", DRIVER_VERSION);
 
         if (copy_to_user(buf, temp_buf, len))
             TPD_INFO("%s, here:%d\n", __func__, __LINE__);
         kfree(temp_buf);
-        HX_PROC_SEND_FLAG = 1;
+        HX83112F_HX_PROC_SEND_FLAG = 1;
     } else
-        HX_PROC_SEND_FLAG = 0;
+        HX83112F_HX_PROC_SEND_FLAG = 0;
     return ret;
 }
 
 #ifdef CONFIG_OPLUS_TP_APK
-static void himax_gesture_debug_mode_set(bool on_off)
+void hx83112f_gesture_debug_mode_set(bool on_off)
 {
     uint8_t tmp_addr[4] = {0};
     uint8_t tmp_data[4] = {0};
@@ -4786,29 +4807,29 @@ static void himax_gesture_debug_mode_set(bool on_off)
     tmp_addr[0] = 0xF8;
 
     if (on_off) {
-        switch_algo = buf[0];
-        check_point_format = 1;
+        hx83112f_switch_algo = buf[0];
+        hx83112f_check_point_format = 1;
         tmp_data[3] = 0xA1;
         tmp_data[2] = 0x1A;
         tmp_data[1] = 0xA1;
         tmp_data[0] = 0x1A;
-        himax_register_write(tmp_addr, 4, tmp_data, 0);
+        hx83112f_register_write(tmp_addr, 4, tmp_data, 0);
         TPD_INFO("%s: Report 40 trajectory coordinate points .\n", __func__);
     }  else {
-        switch_algo = 0;
-        check_point_format = 0;
+        hx83112f_switch_algo = 0;
+        hx83112f_check_point_format = 0;
         tmp_data[3] = 0x00;
         tmp_data[2] = 0x00;
         tmp_data[1] = 0x00;
         tmp_data[0] = 0x00;
 
-        himax_register_write(tmp_addr, 4, tmp_data, 0);
+        hx83112f_register_write(tmp_addr, 4, tmp_data, 0);
         TPD_INFO("%s: close FW enter algorithm switch.\n", __func__);
     }
 }
 
 
-static void himax_debug_mode_set(bool on_off)
+void hx83112f_debug_mode_set(bool on_off)
 {
     uint8_t tmp_addr[4] = {0};
     uint8_t tmp_data[4] = {0};
@@ -4819,173 +4840,173 @@ static void himax_debug_mode_set(bool on_off)
     tmp_addr[0] = 0xF8;
 
     if (on_off) {
-        switch_algo = buf[0];
-        check_point_format = 0;
+        hx83112f_switch_algo = buf[0];
+        hx83112f_check_point_format = 0;
         tmp_data[3] = 0xA5;
         tmp_data[2] = 0x5A;
         tmp_data[1] = 0xA5;
         tmp_data[0] = 0x5A;
-        himax_register_write(tmp_addr, 4, tmp_data, 0);
+        hx83112f_register_write(tmp_addr, 4, tmp_data, 0);
         TPD_INFO("%s: open FW enter algorithm switch.\n", __func__);
     }  else {
-        switch_algo = 0;
-        check_point_format = 0;
+        hx83112f_switch_algo = 0;
+        hx83112f_check_point_format = 0;
         tmp_data[3] = 0x00;
         tmp_data[2] = 0x00;
         tmp_data[1] = 0x00;
         tmp_data[0] = 0x00;
 
-        himax_register_write(tmp_addr, 4, tmp_data, 0);
+        hx83112f_register_write(tmp_addr, 4, tmp_data, 0);
         TPD_INFO("%s: close FW enter algorithm switch.\n", __func__);
     }
 }
 
-static void himax_debug_sta_judge(struct chip_data_hx83112f *chip_info)
+void hx83112f_debug_sta_judge(struct chip_data_hx83112f *chip_info)
 {
-    static struct himax_fw_debug_info last_sta;
-    struct himax_fw_debug_info sta;
+    static struct hx83112f_himax_fw_debug_info last_sta;
+    struct hx83112f_himax_fw_debug_info sta;
 
-    memcpy(&sta, &hx_touch_data->hx_state_info[3], sizeof(sta));
+    memcpy(&sta, &hx83112f_hx_touch_data->hx_state_info[3], sizeof(sta));
 
     if (last_sta.recal0 != sta.recal0) {
         if (sta.recal0) {
-            log_buf_write(private_ts, 1);
+            log_buf_write(hx83112f_private_ts, 1);
         } else {
-            log_buf_write(private_ts, 2);
+            log_buf_write(hx83112f_private_ts, 2);
         }
 
     }
 
     if (last_sta.recal1 != sta.recal1) {
         if (sta.recal1) {
-            log_buf_write(private_ts, 4);
+            log_buf_write(hx83112f_private_ts, 4);
         } else {
-            log_buf_write(private_ts, 3);
+            log_buf_write(hx83112f_private_ts, 3);
         }
 
     }
 
     if (last_sta.paseline != sta.paseline) {
         if (sta.paseline) {
-            log_buf_write(private_ts, 5);
+            log_buf_write(hx83112f_private_ts, 5);
         } else {
-            //log_buf_write(private_ts, 4);
+            //log_buf_write(hx83112f_private_ts, 4);
         }
 
     }
 
     if (last_sta.palm != sta.palm) {
         if (sta.palm) {
-            log_buf_write(private_ts, 7);
+            log_buf_write(hx83112f_private_ts, 7);
         } else {
-            log_buf_write(private_ts, 6);
+            log_buf_write(hx83112f_private_ts, 6);
         }
 
     }
     if (last_sta.idle != sta.idle) {
         if (sta.idle) {
-            log_buf_write(private_ts, 9);
+            log_buf_write(hx83112f_private_ts, 9);
         } else {
-            log_buf_write(private_ts, 8);
+            log_buf_write(hx83112f_private_ts, 8);
         }
 
     }
 
     if (last_sta.water != sta.water) {
         if (sta.water) {
-            log_buf_write(private_ts, 11);
+            log_buf_write(hx83112f_private_ts, 11);
         } else {
-            log_buf_write(private_ts, 10);
+            log_buf_write(hx83112f_private_ts, 10);
         }
 
     }
 
     if (last_sta.hopping != sta.hopping) {
         if (sta.hopping) {
-            log_buf_write(private_ts, 13);
+            log_buf_write(hx83112f_private_ts, 13);
         } else {
-            log_buf_write(private_ts, 12);
+            log_buf_write(hx83112f_private_ts, 12);
         }
 
     }
 
     if (last_sta.noise != sta.noise) {
         if (sta.noise) {
-            log_buf_write(private_ts, 15);
+            log_buf_write(hx83112f_private_ts, 15);
         } else {
-            log_buf_write(private_ts, 14);
+            log_buf_write(hx83112f_private_ts, 14);
         }
 
     }
 
     if (last_sta.glove != sta.glove) {
         if (sta.glove) {
-            log_buf_write(private_ts, 17);
+            log_buf_write(hx83112f_private_ts, 17);
         } else {
-            log_buf_write(private_ts, 16);
+            log_buf_write(hx83112f_private_ts, 16);
         }
 
     }
 
     if (last_sta.border != sta.border) {
         if (sta.border) {
-            log_buf_write(private_ts, 19);
+            log_buf_write(hx83112f_private_ts, 19);
         } else {
-            log_buf_write(private_ts, 18);
+            log_buf_write(hx83112f_private_ts, 18);
         }
 
     }
 
     if (last_sta.vr != sta.vr) {
         if (sta.vr) {
-            log_buf_write(private_ts, 21);
+            log_buf_write(hx83112f_private_ts, 21);
         } else {
-            log_buf_write(private_ts, 20);
+            log_buf_write(hx83112f_private_ts, 20);
         }
 
     }
 
     if (last_sta.big_small != sta.big_small) {
         if (sta.big_small) {
-            log_buf_write(private_ts, 23);
+            log_buf_write(hx83112f_private_ts, 23);
         } else {
-            log_buf_write(private_ts, 22);
+            log_buf_write(hx83112f_private_ts, 22);
         }
 
     }
 
     if (last_sta.one_block != sta.one_block) {
         if (sta.one_block) {
-            log_buf_write(private_ts, 25);
+            log_buf_write(hx83112f_private_ts, 25);
         } else {
-            log_buf_write(private_ts, 24);
+            log_buf_write(hx83112f_private_ts, 24);
         }
 
     }
 
     if (last_sta.blewing != sta.blewing) {
         if (sta.blewing) {
-            log_buf_write(private_ts, 27);
+            log_buf_write(hx83112f_private_ts, 27);
         } else {
-            log_buf_write(private_ts, 26);
+            log_buf_write(hx83112f_private_ts, 26);
         }
 
     }
 
     if (last_sta.thumb_flying != sta.thumb_flying) {
         if (sta.thumb_flying) {
-            log_buf_write(private_ts, 29);
+            log_buf_write(hx83112f_private_ts, 29);
         } else {
-            log_buf_write(private_ts, 28);
+            log_buf_write(hx83112f_private_ts, 28);
         }
 
     }
 
     if (last_sta.border_extend != sta.border_extend) {
         if (sta.border_extend) {
-            log_buf_write(private_ts, 31);
+            log_buf_write(hx83112f_private_ts, 31);
         } else {
-            log_buf_write(private_ts, 30);
+            log_buf_write(hx83112f_private_ts, 30);
         }
 
     }
@@ -4994,8 +5015,8 @@ static void himax_debug_sta_judge(struct chip_data_hx83112f *chip_info)
 
     if (tp_debug > 0) {
         TPD_INFO("The sta  is = 0x%02X,0x%02X\n",
-                 hx_touch_data->hx_state_info[3],
-                 hx_touch_data->hx_state_info[4]);
+                 hx83112f_hx_touch_data->hx_state_info[3],
+                 hx83112f_hx_touch_data->hx_state_info[4]);
     }
 
     return;
@@ -5018,12 +5039,12 @@ static int hx83112f_get_touch_points(void *chip_data, struct point_info *points,
     int hx_point_num;
     uint8_t hx_state_info_pos;
 
-    if (!hx_touch_data) {
-        TPD_INFO("%s:%d hx_touch_data is NULL\n", __func__, __LINE__);
+    if (!hx83112f_hx_touch_data) {
+        TPD_INFO("%s:%d hx83112f_hx_touch_data is NULL\n", __func__, __LINE__);
     }
 
-    if (!hx_touch_data->hx_coord_buf) {
-        TPD_INFO("%s:%d hx_touch_data->hx_coord_buf is NULL\n", __func__, __LINE__);
+    if (!hx83112f_hx_touch_data->hx_coord_buf) {
+        TPD_INFO("%s:%d hx83112f_hx_touch_data->hx_coord_buf is NULL\n", __func__, __LINE__);
         return 0;
     }
 
@@ -5033,21 +5054,21 @@ static int hx83112f_get_touch_points(void *chip_data, struct point_info *points,
         return -ENOMEM;
     }
 
-    himax_burst_enable(0);
-    if (g_diag_command)
-        ret = himax_read_event_stack(buf, 128);
+    hx83112f_burst_enable(0);
+    if (hx83112f_g_diag_command)
+        ret = hx83112f_read_event_stack(buf, 128);
     else
-        ret = himax_read_event_stack(buf, hx_touch_data->touch_info_size);
+        ret = hx83112f_read_event_stack(buf, hx83112f_hx_touch_data->touch_info_size);
     if (!ret) {
         TPD_INFO("%s: can't read data from chip in normal!\n", __func__);
         goto checksum_fail;
     }
 
     if (LEVEL_DEBUG == tp_debug) {
-        himax_log_touch_data(buf, hx_touch_data);
+        hx83112f_log_touch_data(buf, hx83112f_hx_touch_data);
     }
 
-    check_sum_cal = himax_checksum_cal(chip_info, buf, ts_status);//????checksum
+    check_sum_cal = hx83112f_checksum_cal(chip_info, buf, ts_status);//????checksum
     if (check_sum_cal == CHECKSUM_FAIL) {
         goto checksum_fail;
     } else if (check_sum_cal == ERR_WORK_OUT) {
@@ -5058,43 +5079,43 @@ static int hx83112f_get_touch_points(void *chip_data, struct point_info *points,
 
     //himax_assign_touch_data(buf,ts_status);//??buf??, ??hx_coord_buf
 
-    hx_state_info_pos = hx_touch_data->touch_info_size - 6;
+    hx_state_info_pos = hx83112f_hx_touch_data->touch_info_size - 6;
     if(ts_status == HX_REPORT_COORD) {
-        memcpy(hx_touch_data->hx_coord_buf, &buf[0], hx_touch_data->touch_info_size);
+        memcpy(hx83112f_hx_touch_data->hx_coord_buf, &buf[0], hx83112f_hx_touch_data->touch_info_size);
         if(buf[hx_state_info_pos] != 0xFF && buf[hx_state_info_pos + 1] != 0xFF) {
-            memcpy(hx_touch_data->hx_state_info, &buf[hx_state_info_pos], 5);
+            memcpy(hx83112f_hx_touch_data->hx_state_info, &buf[hx_state_info_pos], 5);
 #ifdef CONFIG_OPLUS_TP_APK
             if (chip_info->debug_mode_sta) {
-                himax_debug_sta_judge(chip_info);
+                hx83112f_debug_sta_judge(chip_info);
             }
 #endif
         } else {
-            memset(hx_touch_data->hx_state_info, 0x00, sizeof(hx_touch_data->hx_state_info));
+            memset(hx83112f_hx_touch_data->hx_state_info, 0x00, sizeof(hx83112f_hx_touch_data->hx_state_info));
         }
     }
-    if (g_diag_command) {
+    if (hx83112f_g_diag_command) {
         mutual_num = chip_info->hw_res->TX_NUM * chip_info->hw_res->RX_NUM;
         self_num = chip_info->hw_res->TX_NUM + chip_info->hw_res->RX_NUM;
-        TPD_INFO("hx_touch_data->touch_all_size= %d hx_touch_data->touch_info_size = %d, %d\n", \
-                 hx_touch_data->touch_all_size, hx_touch_data->touch_info_size, hx_touch_data->touch_all_size - hx_touch_data->touch_info_size);
-        memcpy(hx_touch_data->hx_rawdata_buf, &buf[hx_touch_data->touch_info_size], hx_touch_data->touch_all_size - hx_touch_data->touch_info_size);
-        if (!diag_check_sum(hx_touch_data)) {
+        TPD_INFO("hx83112f_hx_touch_data->touch_all_size= %d hx83112f_hx_touch_data->touch_info_size = %d, %d\n", \
+                 hx83112f_hx_touch_data->touch_all_size, hx83112f_hx_touch_data->touch_info_size, hx83112f_hx_touch_data->touch_all_size - hx83112f_hx_touch_data->touch_info_size);
+        memcpy(hx83112f_hx_touch_data->hx_rawdata_buf, &buf[hx83112f_hx_touch_data->touch_info_size], hx83112f_hx_touch_data->touch_all_size - hx83112f_hx_touch_data->touch_info_size);
+        if (!hx83112f_diag_check_sum(hx83112f_hx_touch_data)) {
             goto err_workqueue_out;
         }
-        diag_parse_raw_data(hx_touch_data, mutual_num, self_num, g_diag_command, hx_touch_data->diag_mutual, diag_self);
+        hx83112f_diag_parse_raw_data(hx83112f_hx_touch_data, mutual_num, self_num, hx83112f_g_diag_command, hx83112f_hx_touch_data->diag_mutual, hx83112f_diag_self);
     }
 
-    if (hx_touch_data->hx_coord_buf[HX_TOUCH_INFO_POINT_CNT] == 0xff)//HX_TOUCH_INFO_POINT_CNT buf???????
+    if (hx83112f_hx_touch_data->hx_coord_buf[HX83112F_HX_TOUCH_INFO_POINT_CNT] == 0xff)//HX83112F_HX_TOUCH_INFO_POINT_CNT buf???????
         hx_point_num = 0;
     else
-        hx_point_num = hx_touch_data->hx_coord_buf[HX_TOUCH_INFO_POINT_CNT] & 0x0f;
+        hx_point_num = hx83112f_hx_touch_data->hx_coord_buf[HX83112F_HX_TOUCH_INFO_POINT_CNT] & 0x0f;
 
 
     for (i = 0; i < 10; i++) {
-        x = hx_touch_data->hx_coord_buf[i * 4] << 8 | hx_touch_data->hx_coord_buf[i * 4 + 1];
-        y = (hx_touch_data->hx_coord_buf[i * 4 + 2] << 8 | hx_touch_data->hx_coord_buf[i * 4 + 3]);
-        z = hx_touch_data->hx_coord_buf[i + 40];
-        if(x >= 0 && x <= private_ts->resolution_info.max_x && y >= 0 && y <= private_ts->resolution_info.max_y) {
+        x = hx83112f_hx_touch_data->hx_coord_buf[i * 4] << 8 | hx83112f_hx_touch_data->hx_coord_buf[i * 4 + 1];
+        y = (hx83112f_hx_touch_data->hx_coord_buf[i * 4 + 2] << 8 | hx83112f_hx_touch_data->hx_coord_buf[i * 4 + 3]);
+        z = hx83112f_hx_touch_data->hx_coord_buf[i + 40];
+        if(x >= 0 && x <= hx83112f_private_ts->resolution_info.max_x && y >= 0 && y <= hx83112f_private_ts->resolution_info.max_y) {
             points[i].x = x;
             points[i].y = y;
             points[i].width_major = z;
@@ -5107,12 +5128,18 @@ static int hx83112f_get_touch_points(void *chip_data, struct point_info *points,
     //TPD_DEBUG("%s:%d  obj_attention = 0x%x\n", __func__, __LINE__, obj_attention);
 
 checksum_fail:
+    if (buf) {
+        kfree(buf);
+        buf = NULL;
+    }
     return obj_attention;
 err_workqueue_out:
 workqueue_out:
-    if (buf)
+    if (buf) {
         kfree(buf);
-    //himax_ic_reset(chip_info, false, true);
+        buf = NULL;
+    }
+    //hx83112f_ic_reset(chip_info, false, true);
     return -EINVAL;
 
 }
@@ -5120,7 +5147,7 @@ workqueue_out:
 static int hx83112f_ftm_process(void *chip_data)
 {
 #ifdef HX_RST_PIN_FUNC
-    hx83112f_resetgpio_set(g_chip_info->hw_res, false); // reset gpio
+    hx83112f_resetgpio_set(hx83112f_g_chip_info->hw_res, false); // reset gpio
 #endif
     switch_spi7cs_state(false); // in case of current leakaging in ftm mode
     return 0;
@@ -5157,33 +5184,33 @@ static uint32_t hx83112f_get_fw_id(struct chip_data_hx83112f *chip_info)
     cmd[3] = 0x10;  // oplus fw id bin address : 0xc014   , 49172    Tp ic address : 0x 10007014
     cmd[2] = 0x00;
     cmd[1] = 0x70;
-    cmd[0] = 0x14;
-    himax_register_read(cmd, 4, data, false);
+    cmd[0] = 0x86;
+    hx83112f_register_read(cmd, 4, data, false);
 
     TPD_INFO("%s : data[0] = 0x%2.2X, data[1] = 0x%2.2X, data[2] = 0x%2.2X, data[3] = 0x%2.2X\n", __func__, data[0], data[1], data[2], data[3]);
 
     //    current_firmware = (data[0] << 24) | (data[1] << 16) | (data[2] << 8) | data[3];
-    current_firmware = data[3];
-    TPD_INFO("CURRENT_FIRMWARE_ID = 0x%x\n", current_firmware);
+    current_firmware = data[2];
+    TPD_INFO("CURRENT_FIRMWARE_ID = 0x%02X\n", current_firmware);
 
     return current_firmware;
 
 }
 
-static void __init get_lcd_vendor(void)
+static void __init hx83112f_get_lcd_vendor(void)
 {
     if (strstr(boot_command_line, "1080p_dsi_vdo-1-fps")) {
-        g_lcd_vendor = 1;
+        hx83112f_g_lcd_vendor = 1;
     } else if (strstr(boot_command_line, "1080p_dsi_vdo-2-fps")) {
-        g_lcd_vendor = 2;
+        hx83112f_g_lcd_vendor = 2;
     } else if (strstr(boot_command_line, "1080p_dsi_vdo-3-fps")) {
-        g_lcd_vendor = 3;
+        hx83112f_g_lcd_vendor = 3;
     } else if (strstr(boot_command_line, "1080p_dsi_vdo-7-fps")) {
-        g_lcd_vendor = 7;
+        hx83112f_g_lcd_vendor = 7;
     } else if (strstr(boot_command_line, "1080p_dsi_vdo-8-fps")) {
-        g_lcd_vendor = 8;
+        hx83112f_g_lcd_vendor = 8;
     } else if (strstr(boot_command_line, "1080p_dsi_vdo-9-fps")) {
-        g_lcd_vendor = 9;
+        hx83112f_g_lcd_vendor = 9;
     }
 }
 
@@ -5197,19 +5224,17 @@ static fw_check_state hx83112f_fw_check(void *chip_data, struct resolution_info 
     //fw check normal need update TP_FW  && device info
     panel_data->TP_FW = hx83112f_get_fw_id(chip_info);
     snprintf(dev_version, HX_DEV_VERSION_LEN, "%02X", panel_data->TP_FW);
-    TPD_INFO("%s: panel_data->TP_FW = %d \n", __func__, panel_data->TP_FW);
-    TPD_INFO("%s: g_lcd_vendor = %d \n", __func__, g_lcd_vendor);
-    TPD_INFO("%s: dev_version = %s \n", __func__, dev_version);
-    if (panel_data->manufacture_info.version) {
-        //       sprintf(panel_data->manufacture_info.version, "0x%x-%d", panel_data->TP_FW, g_lcd_vendor);
-        ver_len = strlen(panel_data->manufacture_info.version);
-        if (ver_len <= 11) {
-            //strlcat(panel_data->manufacture_info.version, dev_version, MAX_DEVICE_VERSION_LENGTH);
-            snprintf(panel_data->manufacture_info.version + 9, sizeof(dev_version), dev_version);
-        } else {
-            strlcpy(&panel_data->manufacture_info.version[12], dev_version, 3);
-        }
-    }
+    TPD_INFO("%s: panel_data->TP_FW = %02X \n", __func__, panel_data->TP_FW);
+	if (panel_data->manufacture_info.version) {
+		sprintf(dev_version, "%02X", panel_data->TP_FW);
+		ver_len = strlen(panel_data->manufacture_info.version);
+		if (ver_len <= 11) {
+			strlcat(panel_data->manufacture_info.version, dev_version, MAX_DEVICE_VERSION_LENGTH);
+			snprintf(panel_data->manufacture_info.version + 9, sizeof(dev_version), dev_version);
+		} else {
+			strlcpy(&panel_data->manufacture_info.version[12], dev_version, 3);
+		}
+	}
 
     return FW_NORMAL;
 }
@@ -5242,22 +5267,22 @@ static void hx83112f_resume_prepare(void *chip_data)
     #ifdef HX_ZERO_FLASH
     TPD_DETAIL("It will update fw,if there is power-off in suspend!\n");
 
-    g_zero_event_count = 0;
+    hx83112f_g_zero_event_count = 0;
 
-    hx83112f_enable_interrupt(g_chip_info, false);
+    hx83112f_enable_interrupt(hx83112f_g_chip_info, false);
 
     // trigger reset
-    //hx83112f_resetgpio_set(g_chip_info->hw_res, false); // reset gpio
-    //hx83112f_resetgpio_set(g_chip_info->hw_res, true); // reset gpio
+    //hx83112f_resetgpio_set(hx83112f_g_chip_info->hw_res, false); // reset gpio
+    //hx83112f_resetgpio_set(hx83112f_g_chip_info->hw_res, true); // reset gpio
 
-    g_core_fp.fp_0f_operation_dirly();
-    g_core_fp.fp_reload_disable(0);
-    himax_sense_on(0x00);
+    hx83112f_g_core_fp.fp_0f_operation_dirly();
+    hx83112f_g_core_fp.fp_reload_disable(0);
+    hx83112f_sense_on(0x00);
     // need_modify
     // report all leave event
-    //himax_report_all_leave_event(private_ts);
+    //himax_report_all_leave_event(hx83112f_private_ts);
 
-    hx83112f_enable_interrupt(g_chip_info, true);
+    hx83112f_enable_interrupt(hx83112f_g_chip_info, true);
     #endif
 }
 */
@@ -5283,36 +5308,37 @@ static int hx83112f_reset(void *chip_data)
         return 0;
     }
 
-    g_zero_event_count = 0;
+    hx83112f_g_zero_event_count = 0;
 
     clear_view_touchdown_flag(); //clear touch download flag
     //esd hw reset
-    HX_ESD_RESET_ACTIVATE = 0;
+    HX83112F_HX_ESD_RESET_ACTIVATE = 0;
 
     hx83112f_enable_interrupt(chip_info, false);
 
     do {
         load_fw_times--;
-        himax_mcu_firmware_update_0f(NULL);
-        ret = g_core_fp.fp_reload_disable();
+        hx83112f_mcu_firmware_update_0f(NULL);
+        ret = hx83112f_g_core_fp.fp_reload_disable();
     } while (ret && load_fw_times > 0);
 
     if (!load_fw_times) {
         TPD_INFO("%s: load_fw_times over 10 times\n", __func__);
     }
-    himax_sense_on(0x00);
-    himax_check_remapping();
+    hx83112f_sense_on(0x00);
+    hx83112f_check_remapping();
+
 
 #ifdef CONFIG_TOUCHPANEL_MTK_PLATFORM
     // enable_irq(chip_info->hx_irq);
     hx83112f_enable_interrupt(chip_info, true);
 #endif
-    //hx83112f_enable_interrupt(g_chip_info, true);
+    //hx83112f_enable_interrupt(hx83112f_g_chip_info, true);
     //esd hw reset
     return ret;
 }
 
-void himax_ultra_enter(void)
+void hx83112f_ultra_enter(void)
 {
     uint8_t tmp_data[4];
     int rtimes = 0;
@@ -5326,12 +5352,12 @@ void himax_ultra_enter(void)
             return;
         }
         tmp_data[0] = 0x11;
-        if (himax_bus_write(0x34, 1, tmp_data) < 0) {
+        if (hx83112f_bus_write(0x34, 1, tmp_data) < 0) {
             TPD_INFO("%s: spi write fail!\n", __func__);
             continue;
         }
         tmp_data[0] = 0x00;
-        if (himax_bus_read(0x34, 1, tmp_data) < 0) {
+        if (hx83112f_bus_read(0x34, 1, tmp_data) < 0) {
             TPD_INFO("%s: spi read fail!\n", __func__);
             continue;
         }
@@ -5348,12 +5374,12 @@ void himax_ultra_enter(void)
             return;
         }
         tmp_data[0] = 0x33;
-        if (himax_bus_write(0x33, 1, tmp_data) < 0) {
+        if (hx83112f_bus_write(0x33, 1, tmp_data) < 0) {
             TPD_INFO("%s: spi write fail!\n", __func__);
             continue;
         }
         tmp_data[0] = 0x00;
-        if (himax_bus_read(0x33, 1, tmp_data) < 0) {
+        if (hx83112f_bus_read(0x33, 1, tmp_data) < 0) {
             TPD_INFO("%s: spi read fail!\n", __func__);
             continue;
         }
@@ -5370,12 +5396,12 @@ void himax_ultra_enter(void)
             return;
         }
         tmp_data[0] = 0x22;
-        if (himax_bus_write(0x34, 1, tmp_data) < 0) {
+        if (hx83112f_bus_write(0x34, 1, tmp_data) < 0) {
             TPD_INFO("%s: spi write fail!\n", __func__);
             continue;
         }
         tmp_data[0] = 0x00;
-        if (himax_bus_read(0x34, 1, tmp_data) < 0) {
+        if (hx83112f_bus_read(0x34, 1, tmp_data) < 0) {
             TPD_INFO("%s: spi read fail!\n", __func__);
             continue;
         }
@@ -5392,12 +5418,12 @@ void himax_ultra_enter(void)
             return;
         }
         tmp_data[0] = 0xAA;
-        if (himax_bus_write(0x33, 1, tmp_data) < 0) {
+        if (hx83112f_bus_write(0x33, 1, tmp_data) < 0) {
             TPD_INFO("%s: spi write fail!\n", __func__);
             continue;
         }
         tmp_data[0] = 0x00;
-        if (himax_bus_read(0x33, 1, tmp_data) < 0) {
+        if (hx83112f_bus_read(0x33, 1, tmp_data) < 0) {
             TPD_INFO("%s: spi read fail!\n", __func__);
             continue;
         }
@@ -5414,12 +5440,12 @@ void himax_ultra_enter(void)
             return;
         }
         tmp_data[0] = 0x33;
-        if (himax_bus_write(0x33, 1, tmp_data) < 0) {
+        if (hx83112f_bus_write(0x33, 1, tmp_data) < 0) {
             TPD_INFO("%s: spi write fail!\n", __func__);
             continue;
         }
         tmp_data[0] = 0x00;
-        if (himax_bus_read(0x33, 1, tmp_data) < 0) {
+        if (hx83112f_bus_read(0x33, 1, tmp_data) < 0) {
             TPD_INFO("%s: spi read fail!\n", __func__);
             continue;
         }
@@ -5436,12 +5462,12 @@ void himax_ultra_enter(void)
             return;
         }
         tmp_data[0] = 0xAA;
-        if (himax_bus_write(0x33, 1, tmp_data) < 0) {
+        if (hx83112f_bus_write(0x33, 1, tmp_data) < 0) {
             TPD_INFO("%s: spi write fail!\n", __func__);
             continue;
         }
         tmp_data[0] = 0x00;
-        if (himax_bus_read(0x33, 1, tmp_data) < 0) {
+        if (hx83112f_bus_read(0x33, 1, tmp_data) < 0) {
             TPD_INFO("%s: spi read fail!\n", __func__);
             continue;
         }
@@ -5454,7 +5480,7 @@ void himax_ultra_enter(void)
 }
 
 bool p_sensor_rec = false;
-static int hx83112f_enable_black_gesture(struct chip_data_hx83112f *chip_info, bool enable)
+int hx83112f_enable_black_gesture(struct chip_data_hx83112f *chip_info, bool enable)
 {
     int ret = 0;
     int retry_cnt = 0;
@@ -5465,7 +5491,7 @@ static int hx83112f_enable_black_gesture(struct chip_data_hx83112f *chip_info, b
     struct touchpanel_data *ts = spi_get_drvdata(chip_info->hx_spi);
 
     TPD_INFO("%s:enable=%d, ts->is_suspended=%d \n", __func__, enable, ts->is_suspended);
-    //private_ts->int_mode = UNBANNABLE;
+    //hx83112f_private_ts->int_mode = UNBANNABLE;
 
     if (ts->is_suspended) {
         if (enable) {
@@ -5478,7 +5504,7 @@ static int hx83112f_enable_black_gesture(struct chip_data_hx83112f *chip_info, b
                 tmp_data[2] = 0x5A;
                 tmp_data[1] = 0xA5;
                 tmp_data[0] = 0x5A;
-                himax_flash_write_burst(tmp_addr, tmp_data);
+                hx83112f_flash_write_burst(tmp_addr, tmp_data);
 
                 do {
                     /*A33A : fw skip 11 29
@@ -5491,12 +5517,12 @@ static int hx83112f_enable_black_gesture(struct chip_data_hx83112f *chip_info, b
                     tmp_data[2] = 0x5A;
                     tmp_data[1] = 0xA5;
                     tmp_data[0] = 0x5A;
-                    himax_flash_write_burst(tmp_addr, tmp_data);
+                    hx83112f_flash_write_burst(tmp_addr, tmp_data);
                     back_data[3] = 0XA5;
                     back_data[2] = 0X5A;
                     back_data[1] = 0XA5;
                     back_data[0] = 0X5A;
-                    himax_register_read(tmp_addr, 4, tmp_data, false);
+                    hx83112f_register_read(tmp_addr, 4, tmp_data, false);
                     TPD_INFO("%s: tmp_data[0] = 0x%02X, retry_cnt=%d \n", __func__, tmp_data[0], retry_cnt);
                     retry_cnt++;
                 } while ((tmp_data[3] != back_data[3]
@@ -5514,7 +5540,7 @@ static int hx83112f_enable_black_gesture(struct chip_data_hx83112f *chip_info, b
                 hx83112f_resetgpio_set(chip_info->hw_res, false); // reset gpio
                 hx83112f_resetgpio_set(chip_info->hw_res, true); // reset gpio
 #else
-                himax_mcu_sys_reset();
+                hx83112f_mcu_sys_reset();
 #endif
                 usleep_range(2000,2001);
                 himax_hx83112f_reload_to_active();
@@ -5523,15 +5549,15 @@ static int hx83112f_enable_black_gesture(struct chip_data_hx83112f *chip_info, b
 
 #ifdef CONFIG_OPLUS_TP_APK
             if (chip_info->debug_gesture_sta) {
-                himax_gesture_debug_mode_set(true);
+                hx83112f_gesture_debug_mode_set(true);
             }
 #endif
         } else {
             p_sensor_rec = true;
-            himax_ultra_enter();
+            hx83112f_ultra_enter();
         }
     } else {
-        g_zero_event_count = 0;
+        hx83112f_g_zero_event_count = 0;
         tmp_addr[3] = 0x10;
         tmp_addr[2] = 0x00;
         tmp_addr[1] = 0x7F;
@@ -5540,10 +5566,10 @@ static int hx83112f_enable_black_gesture(struct chip_data_hx83112f *chip_info, b
         tmp_data[2] = 0x00;
         tmp_data[1] = 0x00;
         tmp_data[0] = 0x00;
-        himax_flash_write_burst(tmp_addr, tmp_data);
-        //himax_sense_on(0);
+        hx83112f_flash_write_burst(tmp_addr, tmp_data);
+        //hx83112f_sense_on(0);
     }
-    //private_ts->int_mode = BANNABLE;
+    //hx83112f_private_ts->int_mode = BANNABLE;
     return ret;
 }
 
@@ -5564,7 +5590,7 @@ static int hx83112f_enable_charge_mode(struct chip_data_hx83112f *chip_info, boo
         tmp_data[2] = 0x5A;
         tmp_data[1] = 0xA5;
         tmp_data[0] = 0x5A;
-        himax_flash_write_burst(tmp_addr, tmp_data);
+        hx83112f_flash_write_burst(tmp_addr, tmp_data);
     } else {
         tmp_addr[3] = 0x10;
         tmp_addr[2] = 0x00;
@@ -5574,7 +5600,7 @@ static int hx83112f_enable_charge_mode(struct chip_data_hx83112f *chip_info, boo
         tmp_data[2] = 0x88;
         tmp_data[1] = 0x77;
         tmp_data[0] = 0x88;
-        himax_flash_write_burst(tmp_addr, tmp_data);
+        hx83112f_flash_write_burst(tmp_addr, tmp_data);
     }
 
     return ret;
@@ -5607,9 +5633,9 @@ static int hx83112f_jitter_switch (struct chip_data_hx83112f *chip_info, bool on
             tmp_data[2] = 0x5A;
             tmp_data[1] = 0xA5;
             tmp_data[0] = 0x5A;
-            himax_flash_write_burst(tmp_addr, tmp_data);
+            hx83112f_flash_write_burst(tmp_addr, tmp_data);
 
-            himax_register_read(tmp_addr, 4, tmp_data, false);
+            hx83112f_register_read(tmp_addr, 4, tmp_data, false);
 
             TPD_INFO("%s:retry times %d, current tmp_data[0, 1, 2, 3] = 0x%2.2X, 0x%2.2X, 0x%2.2X, 0x%2.2X\n", __func__,
                      rtimes, tmp_data[0], tmp_data[1], tmp_data[2], tmp_data[3]);
@@ -5634,9 +5660,9 @@ static int hx83112f_jitter_switch (struct chip_data_hx83112f *chip_info, bool on
             tmp_data[2] = 0x00;
             tmp_data[1] = 0x00;
             tmp_data[0] = 0x00;
-            himax_flash_write_burst(tmp_addr, tmp_data);
+            hx83112f_flash_write_burst(tmp_addr, tmp_data);
 
-            himax_register_read(tmp_addr, 4, tmp_data, false);
+            hx83112f_register_read(tmp_addr, 4, tmp_data, false);
 
             TPD_INFO("%s:retry times %d, current tmp_data[0, 1, 2, 3] = 0x%2.2X, 0x%2.2X, 0x%2.2X, 0x%2.2X\n", __func__,
                      rtimes, tmp_data[0], tmp_data[1], tmp_data[2], tmp_data[3]);
@@ -5675,9 +5701,9 @@ static int hx83112f_enable_headset_mode(struct chip_data_hx83112f *chip_info, bo
                 tmp_data[2] = 0x5A;
                 tmp_data[1] = 0xA5;
                 tmp_data[0] = 0x5A;
-                himax_flash_write_burst(tmp_addr, tmp_data);
+                hx83112f_flash_write_burst(tmp_addr, tmp_data);
 
-                himax_register_read(tmp_addr, 4, tmp_data, false);
+                hx83112f_register_read(tmp_addr, 4, tmp_data, false);
                 TPD_DETAIL("%s:retry times %d, current tmp_data[0, 1, 2, 3] = 0x%2.2X, 0x%2.2X, 0x%2.2X, 0x%2.2X\n", __func__,
                            rtimes, tmp_data[0], tmp_data[1], tmp_data[2], tmp_data[3]);
                 rtimes++;
@@ -5702,9 +5728,9 @@ static int hx83112f_enable_headset_mode(struct chip_data_hx83112f *chip_info, bo
                 tmp_data[2] = 0x00;
                 tmp_data[1] = 0x00;
                 tmp_data[0] = 0x00;
-                himax_flash_write_burst(tmp_addr, tmp_data);
+                hx83112f_flash_write_burst(tmp_addr, tmp_data);
 
-                himax_register_read(tmp_addr, 4, tmp_data, false);
+                hx83112f_register_read(tmp_addr, 4, tmp_data, false);
                 TPD_DETAIL("%s:retry times %d, current tmp_data[0, 1, 2, 3] = 0x%2.2X, 0x%2.2X, 0x%2.2X, 0x%2.2X\n", __func__,
                            rtimes, tmp_data[0], tmp_data[1], tmp_data[2], tmp_data[3]);
                 rtimes++;
@@ -5746,9 +5772,9 @@ static int hx83112f_rotative_switch(struct chip_data_hx83112f *chip_info, int mo
                 tmp_data[2] = 0x5A;
                 tmp_data[1] = 0xA5;
                 tmp_data[0] = 0x5A;
-                himax_flash_write_burst(tmp_addr, tmp_data);
+                hx83112f_flash_write_burst(tmp_addr, tmp_data);
 
-                himax_register_read(tmp_addr, 4, tmp_data, false);
+                hx83112f_register_read(tmp_addr, 4, tmp_data, false);
                 TPD_DETAIL("%s:retry times %d, current tmp_data[0, 1, 2, 3] = 0x%2.2X, 0x%2.2X, 0x%2.2X, 0x%2.2X\n", __func__,
                            rtimes, tmp_data[0], tmp_data[1], tmp_data[2], tmp_data[3]);
                 rtimes++;
@@ -5776,9 +5802,9 @@ static int hx83112f_rotative_switch(struct chip_data_hx83112f *chip_info, int mo
                     tmp_data[2] = 0x3A;
                     tmp_data[1] = 0xA3;
                     tmp_data[0] = 0x3A;
-                    himax_flash_write_burst(tmp_addr, tmp_data);
+                    hx83112f_flash_write_burst(tmp_addr, tmp_data);
 
-                    himax_register_read(tmp_addr, 4, tmp_data, false);
+                    hx83112f_register_read(tmp_addr, 4, tmp_data, false);
 
                     TPD_DETAIL("%s:retry times %d, current tmp_data[0, 1, 2, 3] = 0x%2.2X, 0x%2.2X, 0x%2.2X, 0x%2.2X\n", __func__,
                                rtimes, tmp_data[0], tmp_data[1], tmp_data[2], tmp_data[3]);
@@ -5805,9 +5831,9 @@ static int hx83112f_rotative_switch(struct chip_data_hx83112f *chip_info, int mo
                     tmp_data[2] = 0x1A;
                     tmp_data[1] = 0xA1;
                     tmp_data[0] = 0x1A;
-                    himax_flash_write_burst(tmp_addr, tmp_data);
+                    hx83112f_flash_write_burst(tmp_addr, tmp_data);
 
-                    himax_register_read(tmp_addr, 4, tmp_data, false);
+                    hx83112f_register_read(tmp_addr, 4, tmp_data, false);
 
                     TPD_DETAIL("%s:retry times %d, current tmp_data[0, 1, 2, 3] = 0x%2.2X, 0x%2.2X, 0x%2.2X, 0x%2.2X\n", __func__,
                                rtimes, tmp_data[0], tmp_data[1], tmp_data[2], tmp_data[3]);
@@ -5837,9 +5863,9 @@ static int hx83112f_rotative_switch(struct chip_data_hx83112f *chip_info, int mo
                 tmp_data[2] = 0x5A;
                 tmp_data[1] = 0xA5;
                 tmp_data[0] = 0x5A;
-                himax_flash_write_burst(tmp_addr, tmp_data);
+                hx83112f_flash_write_burst(tmp_addr, tmp_data);
 
-                himax_register_read(tmp_addr, 4, tmp_data, false);
+                hx83112f_register_read(tmp_addr, 4, tmp_data, false);
                 TPD_DETAIL("%s:retry times %d, current tmp_data[0, 1, 2, 3] = 0x%2.2X, 0x%2.2X, 0x%2.2X, 0x%2.2X\n", __func__,
                            rtimes, tmp_data[0], tmp_data[1], tmp_data[2], tmp_data[3]);
                 rtimes++;
@@ -5865,9 +5891,9 @@ static int hx83112f_rotative_switch(struct chip_data_hx83112f *chip_info, int mo
                 tmp_data[2] = 0x9A;
                 tmp_data[1] = 0xA9;
                 tmp_data[0] = 0x9A;
-                himax_flash_write_burst(tmp_addr, tmp_data);
+                hx83112f_flash_write_burst(tmp_addr, tmp_data);
 
-                himax_register_read(tmp_addr, 4, tmp_data, false);
+                hx83112f_register_read(tmp_addr, 4, tmp_data, false);
                 TPD_DETAIL("%s:retry times %d, current tmp_data[0, 1, 2, 3] = 0x%2.2X, 0x%2.2X, 0x%2.2X, 0x%2.2X\n", __func__,
                            rtimes, tmp_data[0], tmp_data[1], tmp_data[2], tmp_data[3]);
                 rtimes++;
@@ -5907,7 +5933,7 @@ static int hx83112f_mode_switch(void *chip_data, work_mode mode, bool flag)
         }*/
         if (!p_sensor_rec) {
         TPD_INFO("%s, enter sleep mode.\n", __func__);
-            himax_sense_off();
+            hx83112f_sense_off();
         }
         ret = 0;
         break;
@@ -5977,14 +6003,14 @@ static int hx83112f_get_gesture_info(void *chip_data, struct gesture_info *gestu
 
     //TPD_DEBUG("%s:%d\n", __func__, __LINE__);
 
-    buf = kzalloc(hx_touch_data->event_size * sizeof(uint8_t), GFP_KERNEL);
+    buf = kzalloc(hx83112f_hx_touch_data->event_size * sizeof(uint8_t), GFP_KERNEL);
     if (!buf) {
         TPD_INFO("%s:%d kzalloc buf error\n", __func__, __LINE__);
         return -1;
     }
 
-    himax_burst_enable(0);
-    if (!himax_read_event_stack(buf, hx_touch_data->event_size)) {
+    hx83112f_burst_enable(0);
+    if (!hx83112f_read_event_stack(buf, hx83112f_hx_touch_data->event_size)) {
         TPD_INFO("%s: can't read data from chip in gesture!\n", __func__);
         kfree(buf);
         return -1;
@@ -6006,7 +6032,7 @@ static int hx83112f_get_gesture_info(void *chip_data, struct gesture_info *gestu
         }
     }
 
-    check_sum_cal = himax_checksum_cal(chip_info, buf, ts_status);
+    check_sum_cal = hx83112f_checksum_cal(chip_info, buf, ts_status);
     if (check_sum_cal == CHECKSUM_FAIL) {
         return -1;
     } else if (check_sum_cal == ERR_WORK_OUT) {
@@ -6049,23 +6075,23 @@ static int hx83112f_get_gesture_info(void *chip_data, struct gesture_info *gestu
 
 
         i = 0;
-        gest_pt_cnt = 0;
+        hx83112f_gest_pt_cnt = 0;
         //TPD_DEBUG("gest doornidate start  %s\n",__func__);
 #ifdef CONFIG_OPLUS_TP_APK
-        if(check_point_format == 0) {
+        if(hx83112f_check_point_format == 0) {
 #endif
             while (i < (gest_len + 1) / 2) {
 
                 if (i == 6) {
-                    gest_pt_x[gest_pt_cnt] = buf[GEST_PTLG_ID_LEN + 4 + i * 2];
+                    hx83112f_gest_pt_x[hx83112f_gest_pt_cnt] = buf[GEST_PTLG_ID_LEN + 4 + i * 2];
                 } else {
-                    gest_pt_x[gest_pt_cnt] = buf[GEST_PTLG_ID_LEN + 4 + i * 2] * private_ts->resolution_info.max_x / 255;
+                    hx83112f_gest_pt_x[hx83112f_gest_pt_cnt] = buf[GEST_PTLG_ID_LEN + 4 + i * 2] * hx83112f_private_ts->resolution_info.max_x / 255;
                 }
-                gest_pt_y[gest_pt_cnt] = buf[GEST_PTLG_ID_LEN + 4 + i * 2 + 1] * private_ts->resolution_info.max_y / 255;
+                hx83112f_gest_pt_y[hx83112f_gest_pt_cnt] = buf[GEST_PTLG_ID_LEN + 4 + i * 2 + 1] * hx83112f_private_ts->resolution_info.max_y / 255;
                 i++;
-                //TPD_DEBUG("gest_pt_x[%d]=%d \n",gest_pt_cnt,gest_pt_x[gest_pt_cnt]);
-                //TPD_DEBUG("gest_pt_y[%d]=%d \n",gest_pt_cnt,gest_pt_y[gest_pt_cnt]);
-                gest_pt_cnt += 1;
+                //TPD_DEBUG("hx83112f_gest_pt_x[%d]=%d \n",hx83112f_gest_pt_cnt,hx83112f_gest_pt_x[hx83112f_gest_pt_cnt]);
+                //TPD_DEBUG("hx83112f_gest_pt_y[%d]=%d \n",hx83112f_gest_pt_cnt,hx83112f_gest_pt_y[hx83112f_gest_pt_cnt]);
+                hx83112f_gest_pt_cnt += 1;
 
             }
 #ifdef CONFIG_OPLUS_TP_APK
@@ -6075,56 +6101,56 @@ static int hx83112f_get_gesture_info(void *chip_data, struct gesture_info *gestu
             int n = 24;
             int m = 26;
             int pt_num;
-            gest_pt_cnt = 40;
-            if (private_ts->gesture_buf) {
+            hx83112f_gest_pt_cnt = 40;
+            if (hx83112f_private_ts->gesture_buf) {
 
                 pt_num = gest_len + buf[126];
                 if (pt_num > 104) {
                     pt_num = 104;
                 }
-                private_ts->gesture_buf[0] = gesture_sign;
-                private_ts->gesture_buf[1] = buf[127];
+                hx83112f_private_ts->gesture_buf[0] = gesture_sign;
+                hx83112f_private_ts->gesture_buf[1] = buf[127];
 
-                if (private_ts->gesture_buf[0] == 0x07) {
+                if (hx83112f_private_ts->gesture_buf[0] == 0x07) {
                     for(j = 0; j < gest_len * 2; j = j + 2) {
-                        private_ts->gesture_buf[3 + j] = buf[n];
-                        private_ts->gesture_buf[3 + j + 1] = buf[n + 1];
+                        hx83112f_private_ts->gesture_buf[3 + j] = buf[n];
+                        hx83112f_private_ts->gesture_buf[3 + j + 1] = buf[n + 1];
                         n = n + 4;
                     }
 
                     for(nn = 0; nn < (pt_num - gest_len)   * 2 ; nn = nn + 2) {
-                        private_ts->gesture_buf[3 + j + nn] = buf[m];
-                        private_ts->gesture_buf[3 + j + nn + 1] = buf[m + 1];
+                        hx83112f_private_ts->gesture_buf[3 + j + nn] = buf[m];
+                        hx83112f_private_ts->gesture_buf[3 + j + nn + 1] = buf[m + 1];
                         m = m + 4;
                     }
-                    private_ts->gesture_buf[2] = pt_num;
+                    hx83112f_private_ts->gesture_buf[2] = pt_num;
                 } else {
-                    private_ts->gesture_buf[2] = gest_len;
-                    memcpy(&private_ts->gesture_buf[3], &buf[24], 80);
+                    hx83112f_private_ts->gesture_buf[2] = gest_len;
+                    memcpy(&hx83112f_private_ts->gesture_buf[3], &buf[24], 80);
                 }
 
             }
         }
 #endif
 
-        if (gest_pt_cnt) {
+        if (hx83112f_gest_pt_cnt) {
             gesture->gesture_type = gesture_sign;/* id */
-            gesture->Point_start.x = gest_pt_x[0];/* start x */
-            gesture->Point_start.y = gest_pt_y[0];/* start y */
-            gesture->Point_end.x = gest_pt_x[1];/* end x */
-            gesture->Point_end.y = gest_pt_y[1];/* end y */
-            gesture->Point_1st.x = gest_pt_x[2]; /* 1 */
-            gesture->Point_1st.y = gest_pt_y[2];
-            gesture->Point_2nd.x = gest_pt_x[3];/* 2 */
-            gesture->Point_2nd.y = gest_pt_y[3];
-            gesture->Point_3rd.x = gest_pt_x[4];/* 3 */
-            gesture->Point_3rd.y = gest_pt_y[4];
-            gesture->Point_4th.x = gest_pt_x[5];/* 4 */
-            gesture->Point_4th.y = gest_pt_y[5];
-            gesture->clockwise = gest_pt_x[6]; /*  1, 0 */
+            gesture->Point_start.x = hx83112f_gest_pt_x[0];/* start x */
+            gesture->Point_start.y = hx83112f_gest_pt_y[0];/* start y */
+            gesture->Point_end.x = hx83112f_gest_pt_x[1];/* end x */
+            gesture->Point_end.y = hx83112f_gest_pt_y[1];/* end y */
+            gesture->Point_1st.x = hx83112f_gest_pt_x[2]; /* 1 */
+            gesture->Point_1st.y = hx83112f_gest_pt_y[2];
+            gesture->Point_2nd.x = hx83112f_gest_pt_x[3];/* 2 */
+            gesture->Point_2nd.y = hx83112f_gest_pt_y[3];
+            gesture->Point_3rd.x = hx83112f_gest_pt_x[4];/* 3 */
+            gesture->Point_3rd.y = hx83112f_gest_pt_y[4];
+            gesture->Point_4th.x = hx83112f_gest_pt_x[5];/* 4 */
+            gesture->Point_4th.y = hx83112f_gest_pt_y[5];
+            gesture->clockwise = hx83112f_gest_pt_x[6]; /*  1, 0 */
             //TPD_DEBUG("gesture->gesture_type = %d \n", gesture->gesture_type);
             /*for (i = 0; i < 6; i++)
-               TPD_DEBUG("%d [ %d  %d ]\n", i, gest_pt_x[i], gest_pt_y[i]);*/
+               TPD_DEBUG("%d [ %d  %d ]\n", i, hx83112f_gest_pt_x[i], hx83112f_gest_pt_y[i]);*/
         }
     }
     //TPD_DETAIL("%s, gesture_type = %d\n", __func__, gesture->gesture_type);
@@ -6136,7 +6162,7 @@ RET_OUT:
     return 0;
 
 err_workqueue_out:
-    //himax_ic_reset(chip_info, false, true);
+    //hx83112f_ic_reset(chip_info, false, true);
     return -1;
 }
 
@@ -6234,7 +6260,7 @@ static void hx83112f_auto_test(struct seq_file *s, void *chip_data, struct syna_
     char *g_Company_info_log = NULL;
     int i = 0;
 
-    g_rslt_data_len = 0;
+    hx83112f_g_rslt_data_len = 0;
     fw_name_test = kzalloc(MAX_FW_NAME_LENGTH, GFP_KERNEL);
     if (fw_name_test == NULL) {
         TPD_INFO("fw_name_test kzalloc error!\n");
@@ -6242,11 +6268,11 @@ static void hx83112f_auto_test(struct seq_file *s, void *chip_data, struct syna_
     }
 
     /*init criteria data*/
-    ret = himax_self_test_data_init(chip_info);
+    ret = hx83112f_self_test_data_init(chip_info);
     /*init criteria data*/
 
     /*Init Log Data */
-    g_1kind_raw_size = 5 * chip_info->hw_res->TX_NUM * chip_info->hw_res->RX_NUM * 2;
+    hx83112f_g_1kind_raw_size = 5 * chip_info->hw_res->TX_NUM * chip_info->hw_res->RX_NUM * 2;
     g_Company_info_log = kcalloc(256, sizeof(char), GFP_KERNEL);
     if (!g_Company_info_log) {
         TPD_INFO("%s:%d g_Company_info_log kzalloc buf error\n", __func__, __LINE__);
@@ -6263,47 +6289,47 @@ static void hx83112f_auto_test(struct seq_file *s, void *chip_data, struct syna_
         goto RET_OUT;
     }
     hx83112f_nf_fail_write_count = 0;
-    g_file_path_OK = kcalloc(256, sizeof(char), GFP_KERNEL);
-    if (!g_file_path_OK) {
-        TPD_INFO("%s:%d g_file_path_OK kzalloc buf error\n", __func__, __LINE__);
+    hx83112f_g_file_path_OK = kcalloc(256, sizeof(char), GFP_KERNEL);
+    if (!hx83112f_g_file_path_OK) {
+        TPD_INFO("%s:%d hx83112f_g_file_path_OK kzalloc buf error\n", __func__, __LINE__);
         goto RET_OUT;
     }
-    g_file_path_NG = kcalloc(256, sizeof(char), GFP_KERNEL);
-    if (!g_file_path_NG) {
-        TPD_INFO("%s:%d g_file_path_NG kzalloc buf error\n", __func__, __LINE__);
+    hx83112f_g_file_path_NG = kcalloc(256, sizeof(char), GFP_KERNEL);
+    if (!hx83112f_g_file_path_NG) {
+        TPD_INFO("%s:%d hx83112f_g_file_path_NG kzalloc buf error\n", __func__, __LINE__);
         goto RET_OUT;
     }
 
-    if (g_rslt_data == NULL) {
-        TPD_INFO("g_rslt_data is NULL");
-        g_rslt_data = kcalloc(g_1kind_raw_size * HX_CRITERIA_ITEM,
-                              sizeof(char), GFP_KERNEL);
-        if (!g_rslt_data) {
-            TPD_INFO("%s:%d g_rslt_data kzalloc buf error\n", __func__, __LINE__);
+	if (hx83112f_g_rslt_data == NULL) {
+		TPD_INFO("%s hx83112f_g_rslt_data is NULL, will vzalloc %d %d %lu hx83112f_g_rslt_data = %lu\n", __func__, \
+			hx83112f_g_1kind_raw_size, hx83112f_hx_criteria_item, sizeof(char), (hx83112f_g_1kind_raw_size * hx83112f_hx_criteria_item * sizeof(char)));
+		hx83112f_g_rslt_data = (char *)vzalloc(hx83112f_g_1kind_raw_size * hx83112f_hx_criteria_item * sizeof(char));
+        if (!hx83112f_g_rslt_data) {
+            TPD_INFO("%s:%d hx83112f_g_rslt_data kzalloc buf error\n", __func__, __LINE__);
             goto RET_OUT;
         }
     } else {
-        memset(g_rslt_data, 0x00, g_1kind_raw_size * HX_CRITERIA_ITEM *
+        memset(hx83112f_g_rslt_data, 0x00, hx83112f_g_1kind_raw_size * hx83112f_hx_criteria_item *
                sizeof(char));
     }
     /*Init Log Data */
 
-    p_node = strstr(private_ts->panel_data.fw_name, ".");
-    copy_len = p_node - private_ts->panel_data.fw_name;
-    memcpy(fw_name_test, private_ts->panel_data.fw_name, copy_len);
+    p_node = strstr(hx83112f_private_ts->panel_data.fw_name, ".");
+    copy_len = p_node - hx83112f_private_ts->panel_data.fw_name;
+    memcpy(fw_name_test, hx83112f_private_ts->panel_data.fw_name, copy_len);
     strlcat(fw_name_test, postfix, MAX_FW_NAME_LENGTH);
     TPD_INFO("%s : fw_name_test is %s\n", __func__, fw_name_test);
 
-    himax_mcu_0f_operation_test_dirly(fw_name_test);
+    hx83112f_mcu_0f_operation_test_dirly(fw_name_test);
     msleep(5);
-    g_core_fp.fp_reload_disable();
+    hx83112f_g_core_fp.fp_reload_disable();
     msleep(5);
-    himax_sense_on(0x00);
-    himax_check_remapping();
-    himax_read_OPLUS_FW_ver(chip_info);
+    hx83112f_sense_on(0x00);
+    hx83112f_check_remapping();
+    hx83112f_read_OPLUS_FW_ver(chip_info);
 
     error_count += hx83112f_int_pin_test(s, chip_info, syna_testdata, g_Test_list_log);
-    error_count += himax_chip_self_test(s, chip_info, g_Test_list_log);
+    error_count += hx83112f_chip_self_test(s, chip_info, g_Test_list_log);
     /*Save Log Data */
     getnstimeofday(&now_time);
     rtc_time_to_tm(now_time.tv_sec, &rtc_now_time);
@@ -6315,22 +6341,23 @@ static void hx83112f_auto_test(struct seq_file *s, void *chip_data, struct syna_
             rtc_now_time.tm_hour, rtc_now_time.tm_min, rtc_now_time.tm_sec);
 
     if (error_count) {
-        snprintf(g_file_path_NG,
+        snprintf(hx83112f_g_file_path_NG,
                  (int)(strlen(HX_RSLT_OUT_PATH_NG) + strlen(g_file_name_NG) + 1),
                  "%s%s", HX_RSLT_OUT_PATH_NG, g_file_name_NG);
-        hx_test_data_pop_out(chip_info, g_Test_list_log, g_Company_info_log, g_project_test_info_log, g_rslt_data, g_file_path_NG);
+        hx83112f_hx_test_data_pop_out(chip_info, g_Test_list_log, g_Company_info_log, g_project_test_info_log, hx83112f_g_rslt_data, hx83112f_g_file_path_NG);
 
     } else {
-        snprintf(g_file_path_OK,
+        snprintf(hx83112f_g_file_path_OK,
                  (int)(strlen(HX_RSLT_OUT_PATH_OK) + strlen(g_file_name_OK) + 1),
                  "%s%s", HX_RSLT_OUT_PATH_OK, g_file_name_OK);
-        hx_test_data_pop_out(chip_info, g_Test_list_log, g_Company_info_log, g_project_test_info_log, g_rslt_data, g_file_path_OK);
+        hx83112f_hx_test_data_pop_out(chip_info, g_Test_list_log, g_Company_info_log, g_project_test_info_log, hx83112f_g_rslt_data, hx83112f_g_file_path_OK);
     }
     /*Save Log Data */
 
     seq_printf(s, "imageid = 0x%llx, deviceid = 0x%llx\n", syna_testdata->TP_FW, syna_testdata->TP_FW);
     seq_printf(s, "%d error(s). %s\n", error_count, error_count ? "" : "All test passed.");
     TPD_INFO(" TP auto test %d error(s). %s\n", error_count, error_count ? "" : "All test passed.");
+    tp_healthinfo_report(hx83112f_g_chip_info->monitor_data_v2, HEALTH_TEST_AUTO, &error_count);
 
 RET_OUT:
     if (fw_name_test) {
@@ -6339,7 +6366,7 @@ RET_OUT:
     }
 
     if (hx83112f_nf_inspection_criteria != NULL) {
-        for (i = 0; i < HX_CRITERIA_SIZE; i++) {
+        for (i = 0; i < hx83112f_hx_criteria_size; i++) {
             if (hx83112f_nf_inspection_criteria[i] != NULL) {
                 kfree(hx83112f_nf_inspection_criteria[i]);
                 hx83112f_nf_inspection_criteria[i] = NULL;
@@ -6356,19 +6383,19 @@ RET_OUT:
         kfree(hx83112f_nf_inspt_crtra_flag);
         hx83112f_nf_inspt_crtra_flag = NULL;
     }
-    /*
-    if (g_rslt_data) {
-        kfree(g_rslt_data);
-        g_rslt_data = NULL;
+/*
+    if (hx83112f_g_rslt_data) {
+        vfree(hx83112f_g_rslt_data);
+        hx83112f_g_rslt_data = NULL;
     }
-    */
-    if (g_file_path_OK) {
-        kfree(g_file_path_OK);
-        g_file_path_OK = NULL;
+*/
+    if (hx83112f_g_file_path_OK) {
+        kfree(hx83112f_g_file_path_OK);
+        hx83112f_g_file_path_OK = NULL;
     }
-    if (g_file_path_NG) {
-        kfree(g_file_path_NG);
-        g_file_path_NG = NULL;
+    if (hx83112f_g_file_path_NG) {
+        kfree(hx83112f_g_file_path_NG);
+        hx83112f_g_file_path_NG = NULL;
     }
     if (g_Test_list_log) {
         kfree(g_Test_list_log);
@@ -6448,32 +6475,32 @@ static void hx83112f_read_debug_data(struct seq_file *s, void *chip_data, int de
         tmp_data[2] = 0x5A;
         tmp_data[1] = 0xA5;
         tmp_data[0] = 0x5A;
-        himax_register_write(tmp_addr, 4, tmp_data, 0);
-        himax_diag_register_set(DEBUG_DATA_DELTA);
+        hx83112f_register_write(tmp_addr, 4, tmp_data, 0);
+        hx83112f_diag_register_set(DEBUG_DATA_DELTA);
     } else {
-        himax_diag_register_set(debug_data_type);
+        hx83112f_diag_register_set(debug_data_type);
     }
     TPD_INFO("%s: Start get debug data in DSRAM\n", __func__);
-    DSRAM_Flag = true;
+    HX83112F_DSRAM_Flag = true;
 
-    himax_ts_diag_func(chip_info, data_mutual_sram);
+    hx83112f_ts_diag_func(chip_info, data_mutual_sram);
 
     for (j = 0; j < chip_info->hw_res->RX_NUM; j++) {
         for (i = 0; i < chip_info->hw_res->TX_NUM; i++) {
             k = ((mutual_num - j) - chip_info->hw_res->RX_NUM * i) - 1;
             seq_printf(s, "%6d", data_mutual_sram[k]);
         }
-        seq_printf(s, " %6d\n", diag_self[j]);
+        seq_printf(s, " %6d\n", hx83112f_diag_self[j]);
     }
 
     seq_printf(s, "\n");
     for (i = 0; i < chip_info->hw_res->TX_NUM; i++) {
-        seq_printf(s, "%6d", diag_self[i]);
+        seq_printf(s, "%6d", hx83112f_diag_self[i]);
     }
     //Clear DSRAM flag
-    himax_diag_register_set(0x00);
-    DSRAM_Flag = false;
-    himax_return_event_stack();
+    hx83112f_diag_register_set(0x00);
+    HX83112F_DSRAM_Flag = false;
+    hx83112f_return_event_stack();
 
     seq_printf(s, "\n");
     seq_printf(s, "ChannelEnd");
@@ -6491,7 +6518,7 @@ static void hx83112f_read_debug_data(struct seq_file *s, void *chip_data, int de
         tmp_data[2] = 0x00;
         tmp_data[1] = 0x00;
         tmp_data[0] = 0x00;
-        himax_register_write(tmp_addr, 4, tmp_data, 0);
+        hx83112f_register_write(tmp_addr, 4, tmp_data, 0);
     }
 
 RET_OUT:
@@ -6575,7 +6602,7 @@ static fw_update_state hx83112f_fw_update(void *chip_data, const struct firmware
     cmd[2] = 0x00;
     cmd[1] = 0x70;
     cmd[0] = 0x14;
-    himax_register_read(cmd, 4, data, false);
+    hx83112f_register_read(cmd, 4, data, false);
     FIRMWARE_ID = (data[0] << 24) | (data[1] << 16) | (data[2] << 8) | data[3];
     TPD_INFO("CURRENT TP FIRMWARE ID is 0x%x, FIRMWARE IMAGE ID is 0x%x\n", CURRENT_FIRMWARE_ID, FIRMWARE_ID);
 
@@ -6586,14 +6613,14 @@ static fw_update_state hx83112f_fw_update(void *chip_data, const struct firmware
     //step 4:flash firmware zone
     TPD_INFO("update-----------------firmware ------------------update!\n");
     // fts_ctpm_fw_upgrade_with_sys_fs_64k((unsigned char *)fw->data, fw->size, false);
-    himax_mcu_firmware_update_0f(fw);
-    g_core_fp.fp_reload_disable();
+    hx83112f_mcu_firmware_update_0f(fw);
+    hx83112f_g_core_fp.fp_reload_disable();
     msleep (10);
 
     TPD_INFO("Firmware && configuration flash over\n");
-    himax_read_OPLUS_FW_ver(chip_info);
-    himax_sense_on(0x00);
-    himax_check_remapping();
+    hx83112f_read_OPLUS_FW_ver(chip_info);
+    hx83112f_sense_on(0x00);
+    hx83112f_check_remapping();
     msleep (10);
 
     // enable_irq(chip_info->hx_irq);
@@ -6625,7 +6652,7 @@ static int hx83112f_reset_gpio_control(void *chip_data, bool enable)
     if (gpio_is_valid(chip_info->hw_res->reset_gpio)) {
         TPD_INFO("%s: set reset state %d\n", __func__, enable);
 #ifdef HX_RST_PIN_FUNC
-        hx83112f_resetgpio_set(g_chip_info->hw_res, enable);
+        hx83112f_resetgpio_set(hx83112f_g_chip_info->hw_res, enable);
 #endif
         TPD_DETAIL("%s: set reset state END\n", __func__);
     }
@@ -6648,7 +6675,7 @@ static uint8_t hx83112f_get_touch_direction(void *chip_data)
 /*Himax_DB_Test Start*/
 
 int hx83112f_freq_point = 0;
-void hx83112f_freq_hop_trigger(void *chip_data)
+static void hx83112f_freq_hop_trigger(void *chip_data)
 {
     uint8_t tmp_addr[4];
     uint8_t tmp_data[4];
@@ -6672,9 +6699,9 @@ void hx83112f_freq_hop_trigger(void *chip_data)
             tmp_data[2] = 0x5A;
             tmp_data[1] = 0xA5;
             tmp_data[0] = 0x5A;
-            himax_flash_write_burst(tmp_addr, tmp_data);
+            hx83112f_flash_write_burst(tmp_addr, tmp_data);
 
-            himax_register_read(tmp_addr, 4, tmp_data, false);
+            hx83112f_register_read(tmp_addr, 4, tmp_data, false);
             TPD_DETAIL("%s:retry times %d, current tmp_data[0,1,2,3] = 0x%2.2X,0x%2.2X,0x%2.2X,0x%2.2X\n", __func__,
                        rtimes, tmp_data[0], tmp_data[1], tmp_data[2], tmp_data[3]);
             rtimes++;
@@ -6700,9 +6727,9 @@ void hx83112f_freq_hop_trigger(void *chip_data)
             tmp_data[2] = 0x3A;
             tmp_data[1] = 0xA3;
             tmp_data[0] = 0x3A;
-            himax_flash_write_burst(tmp_addr, tmp_data);
+            hx83112f_flash_write_burst(tmp_addr, tmp_data);
 
-            himax_register_read(tmp_addr, 4, tmp_data, false);
+            hx83112f_register_read(tmp_addr, 4, tmp_data, false);
             TPD_DETAIL("%s:retry times %d, current tmp_data[0,1,2,3] = 0x%2.2X,0x%2.2X,0x%2.2X,0x%2.2X\n", __func__,
                        rtimes, tmp_data[0], tmp_data[1], tmp_data[2], tmp_data[3]);
             rtimes++;
@@ -6750,14 +6777,14 @@ static struct himax_proc_operations hx83112f_proc_ops = {
     .himax_proc_reset_write =  hx83112f_proc_reset_write,
     .himax_proc_sense_on_off_write =  hx83112f_proc_sense_on_off_write,
     .himax_proc_vendor_read =  hx83112f_proc_vendor_read,
-    .fp_hx_limit_get = himax_limit_get,
+    .fp_hx_limit_get = hx83112f_limit_get,
 #ifdef HX_ENTER_ALGORITHM_NUMBER
     //.himax_proc_enter_algorithm_switch_write = himax_enter_algorithm_number_write,
     //.himax_proc_enter_algorithm_switch_read  = himax_enter_algorithm_number_read,
 #endif
 };
 
-static struct debug_info_proc_operations debug_info_proc_ops = {
+static struct debug_info_proc_operations hx83112f_debug_info_proc_ops = {
     .limit_read    = himax_limit_read,
     .delta_read    = hx83112f_delta_read,
     .baseline_read = hx83112f_baseline_read,
@@ -6767,7 +6794,7 @@ static struct debug_info_proc_operations debug_info_proc_ops = {
 
 #ifdef CONFIG_OPLUS_TP_APK
 
-static void himax_enter_hopping_write(bool on_off)
+void hx83112f_enter_hopping_write(bool on_off)
 {
     uint8_t tmp_addr[4] = {0};
     uint8_t tmp_data[4] = {0};
@@ -6783,7 +6810,7 @@ static void himax_enter_hopping_write(bool on_off)
         tmp_data[2] = 0x5A;
         tmp_data[1] = 0xA5;
         tmp_data[0] = 0x5A;
-        himax_register_write(tmp_addr, 4, tmp_data, 0);
+        hx83112f_register_write(tmp_addr, 4, tmp_data, 0);
 
         tmp_addr[3] = 0x10;
         tmp_addr[2] = 0x00;
@@ -6794,7 +6821,7 @@ static void himax_enter_hopping_write(bool on_off)
         tmp_data[2] = 0x1A;
         tmp_data[1] = 0xA1;
         tmp_data[0] = 0x1A;
-        himax_register_write(tmp_addr, 4, tmp_data, 0);
+        hx83112f_register_write(tmp_addr, 4, tmp_data, 0);
         TPD_INFO("%s: open himax enter hopping write.\n", __func__);
     } else {
         tmp_addr[3] = 0x10;
@@ -6806,7 +6833,7 @@ static void himax_enter_hopping_write(bool on_off)
         tmp_data[2] = 0;
         tmp_data[1] = 0;
         tmp_data[0] = 0;
-        himax_register_write(tmp_addr, 4, tmp_data, 0);
+        hx83112f_register_write(tmp_addr, 4, tmp_data, 0);
 
         tmp_addr[3] = 0x10;
         tmp_addr[2] = 0x00;
@@ -6817,7 +6844,7 @@ static void himax_enter_hopping_write(bool on_off)
         tmp_data[2] = 0;
         tmp_data[1] = 0;
         tmp_data[0] = 0;
-        himax_register_write(tmp_addr, 4, tmp_data, 0);
+        hx83112f_register_write(tmp_addr, 4, tmp_data, 0);
 
         TPD_INFO("%s: close himax hopping write.\n", __func__);
     }
@@ -6843,7 +6870,7 @@ static void himax_apk_debug_set(void *chip_data, bool on_off)
     struct chip_data_hx83112f *chip_info;
     chip_info = (struct chip_data_hx83112f *)chip_data;
 
-    himax_debug_mode_set(on_off);
+    hx83112f_debug_mode_set(on_off);
     chip_info->debug_mode_sta = on_off;
 }
 
@@ -6885,14 +6912,14 @@ static int  himax_apk_gesture_info(void *chip_data, char *buf, int len)
     }
     buf[0] = 255;
 
-    temp = private_ts->gesture_buf[0];
+    temp = hx83112f_private_ts->gesture_buf[0];
     if (temp == 0x00) {
-        temp = private_ts->gesture_buf[1] | 0x80;
+        temp = hx83112f_private_ts->gesture_buf[1] | 0x80;
     }
     buf[0] = temp;
 
     //buf[0] = gesture_buf[0];
-    num = private_ts->gesture_buf[2];
+    num = hx83112f_private_ts->gesture_buf[2];
 
     if(num > 40) {
         num = 40;
@@ -6904,11 +6931,11 @@ static int  himax_apk_gesture_info(void *chip_data, char *buf, int len)
     for (i = 0; i < num; i++) {
         int x;
         int y;
-        x = private_ts->gesture_buf[i * 2 + 3];
-        x = x * private_ts->resolution_info.max_x / 255;
+        x = hx83112f_private_ts->gesture_buf[i * 2 + 3];
+        x = x * hx83112f_private_ts->resolution_info.max_x / 255;
 
-        y = private_ts->gesture_buf[i * 2 + 4];
-        y = y * private_ts->resolution_info.max_y / 255;
+        y = hx83112f_private_ts->gesture_buf[i * 2 + 4];
+        y = y * hx83112f_private_ts->resolution_info.max_y / 255;
 
 
         //TPD_INFO("nova_apk_gesture_info:gesture x is %d,y is %d.\n", x, y);
@@ -6966,7 +6993,7 @@ static void himax_apk_noise_set(void *chip_data, bool on_off)
 {
     struct chip_data_hx83112f *chip_info;
     chip_info = (struct chip_data_hx83112f *)chip_data;
-    himax_enter_hopping_write(on_off);
+    hx83112f_enter_hopping_write(on_off);
     chip_info->noise_sta = on_off;
 
 }
@@ -7042,8 +7069,10 @@ hx83112f_tp_probe(struct spi_device *spi)
     struct chip_data_hx83112f *chip_info = NULL;
     struct touchpanel_data *ts = NULL;
     int ret = -1;
+    u64 time_counter = 0;
 
     TPD_INFO("%s  is called\n", __func__);
+    reset_healthinfo_time_counter(&time_counter);
 
     //step1:Alloc chip_info
     chip_info = kzalloc(sizeof(struct chip_data_hx83112f), GFP_KERNEL);
@@ -7053,13 +7082,19 @@ hx83112f_tp_probe(struct spi_device *spi)
         return ret;
     }
     //memset(chip_info, 0, sizeof(*chip_info));
-    g_chip_info = chip_info;
+    hx83112f_g_chip_info = chip_info;
 
     /* allocate himax report data */
-    hx_touch_data = kzalloc(sizeof(struct himax_report_data), GFP_KERNEL);
-    if (hx_touch_data == NULL) {
+    hx83112f_hx_touch_data = kzalloc(sizeof(struct hx83112f_report_data), GFP_KERNEL);
+    if (hx83112f_hx_touch_data == NULL) {
         goto err_register_driver;
     }
+
+	g_internal_buffer = (uint8_t *)vzalloc(sizeof(uint8_t) * HX_SPI_GEN_MAX_WRITE_SZ);
+	if (g_internal_buffer == NULL) {
+		TPD_INFO("%s: Can't allocate enough g_internal_buffer buf\n", __func__);
+		goto err_g_internal_buffer;
+	}
 
     //step2:Alloc common ts
     ts = common_touch_data_alloc();
@@ -7069,9 +7104,9 @@ hx83112f_tp_probe(struct spi_device *spi)
     }
     memset(ts, 0, sizeof(*ts));
 
-    chip_info->g_fw_buf = vmalloc(128 * 1024);
+    chip_info->g_fw_buf = (u8 *)vzalloc(128 * 1024);
     if (chip_info->g_fw_buf == NULL) {
-        TPD_INFO("fw buf vmalloc error\n");
+        TPD_INFO("fw buf vzalloc error\n");
         //ret = -ENOMEM;
         goto err_g_fw_buf;
     }
@@ -7079,7 +7114,7 @@ hx83112f_tp_probe(struct spi_device *spi)
     //step3:binding dev for easy operate
     chip_info->hx_spi = spi;
     chip_info->syna_ops = &hx83112f_proc_ops;
-    ts->debug_info_ops = &debug_info_proc_ops;
+    ts->debug_info_ops = &hx83112f_debug_info_proc_ops;
     ts->s_client = spi;
     chip_info->hx_irq = spi->irq;
     ts->irq = spi->irq;
@@ -7103,11 +7138,11 @@ hx83112f_tp_probe(struct spi_device *spi)
 
 #ifdef CONFIG_TOUCHPANEL_MTK_PLATFORM
     /* new usage of MTK spi API */
-    memcpy(&chip_info->hx_spi_mcc, &hx_spi_ctrdata, sizeof(struct mtk_chip_config));
+    memcpy(&chip_info->hx_spi_mcc, &hx83112f_hx_spi_ctrdata, sizeof(struct mtk_chip_config));
     ts->s_client->controller_data = (void *)&chip_info->hx_spi_mcc;
 #else
     /* old usage of MTK spi API */
-    memcpy(&chip_info->hx_spi_mcc, &hx_spi_ctrdata, sizeof(struct mt_chip_conf));
+    memcpy(&chip_info->hx_spi_mcc, &hx83112f_hx_spi_ctrdata, sizeof(struct mt_chip_conf));
     ts->s_client->controller_data = (void *)&chip_info->hx_spi_mcc;
 
     ret = spi_setup(ts->s_client);
@@ -7123,7 +7158,7 @@ hx83112f_tp_probe(struct spi_device *spi)
     //step4:file_operations callback binding
     ts->ts_ops = &hx83112f_ops;
 
-    private_ts = ts;
+    hx83112f_private_ts = ts;
 
 #ifdef CONFIG_OPLUS_TP_APK
     himax_init_oplus_apk_op(ts);
@@ -7136,21 +7171,21 @@ hx83112f_tp_probe(struct spi_device *spi)
     }
     // disable_irq_nosync(chip_info->hx_irq);
     hx83112f_enable_interrupt(chip_info, false);
-    if (himax_ic_package_check() == false) {
+    if (hx83112f_ic_package_check() == false) {
         TPD_INFO("Himax chip doesn NOT EXIST");
         goto err_register_driver;
     }
     chip_info->test_limit_name = ts->panel_data.test_limit_name;
-
+    chip_info->monitor_data_v2 = &ts->monitor_data_v2;
     chip_info->p_firmware_headfile = &ts->panel_data.firmware_headfile;
 
     chip_info->himax_0f_update_wq = create_singlethread_workqueue("HMX_0f_update_reuqest");
-    INIT_DELAYED_WORK(&chip_info->work_0f_update, himax_mcu_0f_operation);
+    INIT_DELAYED_WORK(&chip_info->work_0f_update, hx83112f_mcu_0f_operation);
 
-    himax_power_on_init();
+    hx83112f_power_on_init();
 
     //touch data init
-    ret = himax_report_data_init(ts->max_num, ts->hw_res.TX_NUM, ts->hw_res.RX_NUM);
+    ret = hx83112f_report_data_init(ts->max_num, ts->hw_res.TX_NUM, ts->hw_res.RX_NUM);
     if (ret) {
         goto err_register_driver;
     }
@@ -7163,7 +7198,7 @@ hx83112f_tp_probe(struct spi_device *spi)
 
     //step7:create hx83112f related proc files
     himax_create_proc(ts, chip_info->syna_ops);
-    irq_en_cnt = 1;
+    hx83112f_irq_en_cnt = 1;
     TPD_INFO("%s, probe normal end\n", __func__);
 
 #ifdef CONFIG_TOUCHPANEL_MTK_PLATFORM
@@ -7173,15 +7208,19 @@ hx83112f_tp_probe(struct spi_device *spi)
 #endif
     {
         TPD_INFO("In Recovery mode, no-flash download fw by headfile\n");
-            himax_mcu_firmware_update_0f(NULL);
-            g_core_fp.fp_reload_disable();
-            himax_sense_on(0);
-            himax_check_remapping();
+            hx83112f_mcu_firmware_update_0f(NULL);
+            hx83112f_g_core_fp.fp_reload_disable();
+            hx83112f_sense_on(0);
+            hx83112f_check_remapping();
             chip_info->first_download_finished = true;
         //queue_delayed_work(chip_info->himax_0f_update_wq, &chip_info->work_0f_update, msecs_to_jiffies(500));
         /*Himax_DB_Test Start*/
     }
     hx83112f_enable_interrupt(chip_info, true);
+
+    if (ts->health_monitor_v2_support) {
+        tp_healthinfo_report(&ts->monitor_data_v2, HEALTH_PROBE, &time_counter);
+    }
 
     return 0;
 err_spi_setup:
@@ -7189,16 +7228,18 @@ err_spi_setup:
         vfree(chip_info->g_fw_buf);
     }
 err_g_fw_buf:
-err_register_driver:
     hx83112f_enable_interrupt(chip_info, false);
 
     common_touch_data_free(ts);
     ts = NULL;
-
-    if (hx_touch_data) {
-        kfree(hx_touch_data);
+	if (g_internal_buffer) {
+		vfree(g_internal_buffer);
+	}
+err_g_internal_buffer:
+    if (hx83112f_hx_touch_data) {
+        kfree(hx83112f_hx_touch_data);
     }
-
+err_register_driver:
     if (chip_info) {
         kfree(chip_info);
     }
@@ -7303,7 +7344,7 @@ static int __init tp_driver_init(void)
         return -1;
     }
 
-    //get_lcd_vendor();
+    //hx83112f_get_lcd_vendor();
     /*Himax_DB_Test Start*/
     get_oem_verified_boot_state();
     /*Himax_DB_Test End*/

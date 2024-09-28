@@ -1245,10 +1245,6 @@ struct task_struct {
 	/* Mutex deadlock detection: */
 	struct mutex_waiter		*blocked_on;
 #endif
-#ifdef CONFIG_LOCKING_PROTECT
-	unsigned long locking_time_start;
-	unsigned long locking_depth;
-#endif
 
 #ifdef CONFIG_TRACE_IRQFLAGS
 	unsigned int			irq_events;
@@ -1595,9 +1591,7 @@ struct task_struct {
 #ifdef CONFIG_OPLUS_FEATURE_AUDIO_OPT
 	struct task_info oplus_task_info;
 #endif
-#ifdef CONFIG_LOCKING_PROTECT
-	struct list_head locking_entry;
-#endif
+
 #if IS_ENABLED(CONFIG_OPLUS_FEATURE_CPU_JANKINFO)
 	struct task_record record[OPLUS_NR_CPUS];	/* 2*u64 */
 #endif
@@ -1816,9 +1810,6 @@ extern struct pid *cad_pid;
 /*
  * Per process flags
  */
-#ifdef CONFIG_SHRINK_LRU_TRYLOCK
-#define PF_SHRNIK_LRUVECD	0x00000001      /* Early kill for mce process policy */
-#endif /* CONFIG_SHRINK_LRU_TRYLOCK */
 #define PF_IDLE			0x00000002	/* I am an IDLE thread */
 #define PF_EXITING		0x00000004	/* Getting shut down */
 #define PF_EXITPIDONE		0x00000008	/* PI exit done on shut down */

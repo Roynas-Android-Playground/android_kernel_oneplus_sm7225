@@ -25,19 +25,12 @@
 #include "../zram_drv_internal.h"
 #include "hybridswap_internal.h"
 
-enum swapd_pressure_level {
-	LEVEL_LOW = 0,
-	LEVEL_MEDIUM,
-	LEVEL_CRITICAL,
-	LEVEL_COUNT
-};
-
 struct swapd_param {
-	unsigned int min_score;
-	unsigned int max_score;
-	unsigned int ub_mem2zram_ratio;
-	unsigned int ub_zram2ufs_ratio;
-	unsigned int refault_threshold;
+	unsigned int min_grade;
+	unsigned int max_grade;
+	unsigned int mem2zram_scale;
+	unsigned int zram2ufs_scale;
+	unsigned int pagefault_level;
 };
 
 struct hybridswapd_task {
@@ -49,14 +42,14 @@ struct hybridswapd_task {
 #define PGDAT_ITEM_DATA(pgdat) ((struct hybridswapd_task*)(pgdat)->android_oem_data1)
 #define PGDAT_ITEM(pgdat, item) (PGDAT_ITEM_DATA(pgdat)->item)
 
-#define AREA_ANON_REFAULT_THRESHOLD 22000
-#define ANON_REFAULT_SNAPSHOT_MIN_INTERVAL 200
-#define EMPTY_ROUND_SKIP_INTERNVAL 20
-#define MAX_SKIP_INTERVAL 1000
+#define INFOS_PAGEFAULT_THRESHOLD 3600
+#define PAGEFAULT_SNAPSHOT_MIN_GAP 150
+#define NOTHING_IGNORE_VALUE 20
+#define MAX_SKIP_GAP 1000
 #define EMPTY_ROUND_CHECK_THRESHOLD 10
 #define ZRAM_WM_RATIO 75
-#define COMPRESS_RATIO 30
-#define SWAPD_MAX_LEVEL_NUM 10
+#define COMPRESS_RATIO 33
+#define SWAPD_MAX_LEVEL_NUM 4
 #define SWAPD_DEFAULT_BIND_CPUS "0-3"
 #define MAX_RECLAIMIN_SZ (200llu << 20)
 #define page_to_kb(nr) (nr << (PAGE_SHIFT - 10))
@@ -65,42 +58,41 @@ struct hybridswapd_task {
 #define PAGES_TO_MB(pages) ((pages) >> 8)
 #define PAGES_PER_1MB (1 << 8)
 
-unsigned long long global_anon_refault_ratio;
+unsigned long long total_pagefault_percent;
 unsigned long long swapd_skip_interval;
 bool last_round_is_empty;
 unsigned long last_swapd_time;
-struct eventfd_ctx *swapd_press_efd[LEVEL_COUNT];
-atomic64_t zram_wm_ratio = ATOMIC_LONG_INIT(ZRAM_WM_RATIO);
-atomic64_t compress_ratio = ATOMIC_LONG_INIT(COMPRESS_RATIO);
-atomic_t avail_buffers = ATOMIC_INIT(0);
-atomic_t min_avail_buffers = ATOMIC_INIT(0);
-atomic_t high_avail_buffers = ATOMIC_INIT(0);
+atomic64_t zram_wm_scale = ATOMIC_LONG_INIT(ZRAM_WM_RATIO);
+atomic64_t compress_scale = ATOMIC_LONG_INIT(COMPRESS_RATIO);
+atomic_t usable_mem = ATOMIC_INIT(0);
+atomic_t min_mem_watermark = ATOMIC_INIT(0);
+atomic_t high_mem_watermark = ATOMIC_INIT(0);
 atomic_t max_reclaim_size = ATOMIC_INIT(100);
-atomic64_t free_swap_threshold = ATOMIC64_INIT(0);
+atomic64_t free_swap_level = ATOMIC64_INIT(0);
 atomic64_t zram_crit_thres = ATOMIC_LONG_INIT(0);
-atomic64_t cpuload_threshold = ATOMIC_LONG_INIT(0);
-atomic64_t area_anon_refault_threshold = ATOMIC_LONG_INIT(AREA_ANON_REFAULT_THRESHOLD);
-atomic64_t anon_refault_snapshot_min_interval = ATOMIC_LONG_INIT(ANON_REFAULT_SNAPSHOT_MIN_INTERVAL);
-atomic64_t empty_round_skip_interval = ATOMIC_LONG_INIT(EMPTY_ROUND_SKIP_INTERNVAL);
-atomic64_t max_skip_interval = ATOMIC_LONG_INIT(MAX_SKIP_INTERVAL);
-atomic64_t empty_round_check_threshold = ATOMIC_LONG_INIT(EMPTY_ROUND_CHECK_THRESHOLD);
+atomic64_t cpuload_level = ATOMIC_LONG_INIT(0);
+atomic64_t infos_pagefault_level = ATOMIC_LONG_INIT(INFOS_PAGEFAULT_THRESHOLD);
+atomic64_t pagefault_refresh_min = ATOMIC_LONG_INIT(PAGEFAULT_SNAPSHOT_MIN_GAP);
+atomic64_t nothing_ignore_skip_interval = ATOMIC_LONG_INIT(NOTHING_IGNORE_VALUE);
+atomic64_t max_skip_interval = ATOMIC_LONG_INIT(MAX_SKIP_GAP);
+atomic64_t nothing_ignore_check_level = ATOMIC_LONG_INIT(EMPTY_ROUND_CHECK_THRESHOLD);
 static unsigned long reclaim_exceed_sleep_ms = 50;
 static unsigned long all_totalreserve_pages;
 
-static wait_queue_head_t snapshotd_wait;
-static atomic_t snapshotd_wait_flag;
-static atomic_t snapshotd_init_flag = ATOMIC_LONG_INIT(0);
-static struct task_struct *snapshotd_task;
-static DEFINE_MUTEX(pressure_event_lock);
-static pid_t swapd_pid = -1;
-static unsigned long long area_last_anon_pagefault;
-static unsigned long last_anon_snapshot_time;
+static wait_queue_head_t refresh_daemonwait;
+static atomic_t refresh_daemonwait_flag;
+static atomic_t refresh_daemoninit_flag = ATOMIC_LONG_INIT(0);
+static struct task_struct *refresh_daemontask;
+static DEFINE_MUTEX(lowmem_event_lock);
+static pid_t swapid = -1;
+static unsigned long long infos_last_anon_pagefault;
+static unsigned long last_refresh_t;
 static struct swapd_param zswap_param[SWAPD_MAX_LEVEL_NUM];
 static enum cpuhp_state swapd_online;
 static struct zram *swapd_zram = NULL;
 static u64 max_reclaimin_size = MAX_RECLAIMIN_SZ;
-atomic_long_t fault_out_pause = ATOMIC_LONG_INIT(0);
-atomic_long_t fault_out_pause_cnt = ATOMIC_LONG_INIT(0);
+atomic_long_t page_fault_pause = ATOMIC_LONG_INIT(0);
+atomic_long_t page_fault_pause_cnt = ATOMIC_LONG_INIT(0);
 #if IS_ENABLED(CONFIG_DRM_MSM) || IS_ENABLED(CONFIG_DRM_OPLUS_NOTIFY)
 static struct notifier_block fb_notif;
 static atomic_t display_off = ATOMIC_LONG_INIT(0);
@@ -118,122 +110,122 @@ extern unsigned long try_to_free_mem_cgroup_pages(struct mem_cgroup *memcg,
 		gfp_t gfp_mask,
 		bool may_swap);
 #ifdef CONFIG_OPLUS_JANK
-extern u32 get_cpu_load(u32 win_cnt, struct cpumask *mask);
+extern u32 fetch_cpu_load(u32 win_cnt, struct cpumask *mask);
 #endif
 
-inline u64 get_zram_wm_ratio_value(void)
+inline u64 fetch_zram_wm_scale_value(void)
 {
-	return atomic64_read(&zram_wm_ratio);
+	return atomic64_read(&zram_wm_scale);
 }
 
-inline u64 get_compress_ratio_value(void)
+inline u64 fetch_compress_scale_value(void)
 {
-	return atomic64_read(&compress_ratio);
+	return atomic64_read(&compress_scale);
 }
 
-inline unsigned int get_avail_buffers_value(void)
+inline unsigned int fetch_usable_mem_value(void)
 {
-	return atomic_read(&avail_buffers);
+	return atomic_read(&usable_mem);
 }
 
-inline unsigned int get_min_avail_buffers_value(void)
+inline unsigned int fetch_min_mem_watermark_value(void)
 {
-	return atomic_read(&min_avail_buffers);
+	return atomic_read(&min_mem_watermark);
 }
 
-inline unsigned int get_high_avail_buffers_value(void)
+inline unsigned int fetch_high_mem_watermark_value(void)
 {
-	return atomic_read(&high_avail_buffers);
+	return atomic_read(&high_mem_watermark);
 }
 
-inline u64 get_swapd_max_reclaim_size(void)
+inline u64 fetch_swapd_max_reclaim_size(void)
 {
 	return atomic_read(&max_reclaim_size);
 }
 
-inline u64 get_free_swap_threshold_value(void)
+inline u64 fetch_free_swap_level_value(void)
 {
-	return atomic64_read(&free_swap_threshold);
+	return atomic64_read(&free_swap_level);
 }
 
-inline unsigned long long get_area_anon_refault_threshold_value(void)
+inline unsigned long long fetch_infos_pagefault_level_value(void)
 {
-	return atomic64_read(&area_anon_refault_threshold);
+	return atomic64_read(&infos_pagefault_level);
 }
 
-inline unsigned long get_anon_refault_snapshot_min_interval_value(void)
+inline unsigned long fetch_pagefault_refresh_min_value(void)
 {
-	return atomic64_read(&anon_refault_snapshot_min_interval);
+	return atomic64_read(&pagefault_refresh_min);
 }
 
-inline unsigned long long get_empty_round_skip_interval_value(void)
+inline unsigned long long fetch_nothing_ignore_skip_interval_value(void)
 {
-	return atomic64_read(&empty_round_skip_interval);
+	return atomic64_read(&nothing_ignore_skip_interval);
 }
 
-inline unsigned long long get_max_skip_interval_value(void)
+inline unsigned long long fetch_max_skip_interval_value(void)
 {
 	return atomic64_read(&max_skip_interval);
 }
 
-inline unsigned long long get_empty_round_check_threshold_value(void)
+inline unsigned long long fetch_nothing_ignore_check_level_value(void)
 {
-	return atomic64_read(&empty_round_check_threshold);
+	return atomic64_read(&nothing_ignore_check_level);
 }
 
-inline u64 get_zram_critical_threshold_value(void)
+inline u64 fetch_zram_critical_level_value(void)
 {
 	return atomic64_read(&zram_crit_thres);
 }
 
-inline u64 get_cpuload_threshold_value(void)
+inline u64 fetch_cpuload_level_value(void)
 {
-	return atomic64_read(&cpuload_threshold);
+	return atomic64_read(&cpuload_level);
 }
 
-static ssize_t avail_buffers_params_write(struct kernfs_open_file *of,
+static ssize_t usable_mem_params_write(struct kernfs_open_file *of,
 		char *buf, size_t nbytes, loff_t off)
 {
-	unsigned int avail_buffers_value;
-	unsigned int min_avail_buffers_value;
-	unsigned int high_avail_buffers_value;
-	u64 free_swap_threshold_value;
+	unsigned int usable_mem_value;
+	unsigned int min_mem_watermark_value;
+	unsigned int high_mem_watermark_value;
+	u64 free_swap_level_value;
 
 	buf = strstrip(buf);
 
 	if (sscanf(buf, "%u %u %u %llu",
-				&avail_buffers_value,
-				&min_avail_buffers_value,
-				&high_avail_buffers_value,
-				&free_swap_threshold_value) != 4)
+				&usable_mem_value,
+				&min_mem_watermark_value,
+				&high_mem_watermark_value,
+				&free_swap_level_value) != 4)
 		return -EINVAL;
 
-	atomic_set(&avail_buffers, avail_buffers_value);
-	atomic_set(&min_avail_buffers, min_avail_buffers_value);
-	atomic_set(&high_avail_buffers, high_avail_buffers_value);
-	atomic64_set(&free_swap_threshold,
-			(free_swap_threshold_value * (SZ_1M / PAGE_SIZE)));
+	atomic_set(&usable_mem, usable_mem_value);
+	atomic_set(&min_mem_watermark, min_mem_watermark_value);
+	atomic_set(&high_mem_watermark, high_mem_watermark_value);
+	atomic64_set(&free_swap_level,
+			(free_swap_level_value * (SZ_1M / PAGE_SIZE)));
 
-	if (atomic_read(&min_avail_buffers) == 0)
-		atomic_set(&snapshotd_init_flag, 0);
+	if (atomic_read(&min_mem_watermark) == 0)
+		atomic_set(&refresh_daemoninit_flag, 0);
 	else
-		atomic_set(&snapshotd_init_flag, 1);
+		atomic_set(&refresh_daemoninit_flag, 1);
 
 	wake_all_swapd();
 
 	return nbytes;
 }
 
-static int avail_buffers_params_show(struct seq_file *m, void *v)
+static int usable_mem_params_show(struct seq_file *m, void *v)
 {
 	seq_printf(m, "avail_buffers: %u\n",
-			atomic_read(&avail_buffers));
+			atomic_read(&usable_mem));
 	seq_printf(m, "min_avail_buffers: %u\n",
-			atomic_read(&min_avail_buffers));
+			atomic_read(&min_mem_watermark));
 	seq_printf(m, "high_avail_buffers: %u\n",
-			atomic_read(&high_avail_buffers));
+			atomic_read(&high_mem_watermark));
 	seq_printf(m, "free_swap_threshold: %llu\n",
-			(atomic64_read(&free_swap_threshold) * PAGE_SIZE / SZ_1M));
+			(atomic64_read(&free_swap_level) * PAGE_SIZE / SZ_1M));
 
 	return 0;
 }
@@ -263,38 +255,38 @@ static int swapd_max_reclaim_size_show(struct seq_file *m, void *v)
 	return 0;
 }
 
-static int area_anon_refault_threshold_write(struct cgroup_subsys_state *css,
+static int infos_pagefault_level_write(struct cgroup_subsys_state *css,
 		struct cftype *cft, s64 val)
 {
 	if (val < 0)
 		return -EINVAL;
 
-	atomic64_set(&area_anon_refault_threshold, val);
+	atomic64_set(&infos_pagefault_level, val);
 
 	return 0;
 }
 
-static s64 area_anon_refault_threshold_read(struct cgroup_subsys_state *css,
+static s64 infos_pagefault_level_read(struct cgroup_subsys_state *css,
 		struct cftype *cft)
 {
-	return atomic64_read(&area_anon_refault_threshold);
+	return atomic64_read(&infos_pagefault_level);
 }
 
-static int empty_round_skip_interval_write(struct cgroup_subsys_state *css,
+static int nothing_ignore_skip_interval_write(struct cgroup_subsys_state *css,
 		struct cftype *cft, s64 val)
 {
 	if (val < 0)
 		return -EINVAL;
 
-	atomic64_set(&empty_round_skip_interval, val);
+	atomic64_set(&nothing_ignore_skip_interval, val);
 
 	return 0;
 }
 
-static s64 empty_round_skip_interval_read(struct cgroup_subsys_state *css,
+static s64 nothing_ignore_skip_interval_read(struct cgroup_subsys_state *css,
 		struct cftype *cft)
 {
-	return atomic64_read(&empty_round_skip_interval);
+	return atomic64_read(&nothing_ignore_skip_interval);
 }
 
 static int max_skip_interval_write(struct cgroup_subsys_state *css,
@@ -314,39 +306,38 @@ static s64 max_skip_interval_read(struct cgroup_subsys_state *css,
 	return atomic64_read(&max_skip_interval);
 }
 
-static int empty_round_check_threshold_write(struct cgroup_subsys_state *css,
+static int nothing_ignore_check_level_write(struct cgroup_subsys_state *css,
 		struct cftype *cft, s64 val)
 {
 	if (val < 0)
 		return -EINVAL;
 
-	atomic64_set(&empty_round_check_threshold, val);
+	atomic64_set(&nothing_ignore_check_level, val);
 
 	return 0;
 }
 
-static s64 empty_round_check_threshold_read(struct cgroup_subsys_state *css,
+static s64 nothing_ignore_check_level_read(struct cgroup_subsys_state *css,
 		struct cftype *cft)
 {
-	return atomic64_read(&empty_round_check_threshold);
+	return atomic64_read(&nothing_ignore_check_level);
 }
 
-
-static int anon_refault_snapshot_min_interval_write(
+static int pagefault_refresh_min_write(
 		struct cgroup_subsys_state *css, struct cftype *cft, s64 val)
 {
 	if (val < 0)
 		return -EINVAL;
 
-	atomic64_set(&anon_refault_snapshot_min_interval, val);
+	atomic64_set(&pagefault_refresh_min, val);
 
 	return 0;
 }
 
-static s64 anon_refault_snapshot_min_interval_read(
+static s64 pagefault_refresh_min_read(
 		struct cgroup_subsys_state *css, struct cftype *cft)
 {
-	return atomic64_read(&anon_refault_snapshot_min_interval);
+	return atomic64_read(&pagefault_refresh_min);
 }
 
 static int zram_critical_thres_write(struct cgroup_subsys_state *css,
@@ -366,79 +357,27 @@ static s64 zram_critical_thres_read(struct cgroup_subsys_state *css,
 	return atomic64_read(&zram_crit_thres) >> (20 - PAGE_SHIFT);
 }
 
-static s64 cpuload_threshold_read(struct cgroup_subsys_state *css,
+static s64 cpuload_level_read(struct cgroup_subsys_state *css,
 		struct cftype *cft)
 
 {
-	return atomic64_read(&cpuload_threshold);
+	return atomic64_read(&cpuload_level);
 }
 
-static int cpuload_threshold_write(struct cgroup_subsys_state *css,
+static int cpuload_level_write(struct cgroup_subsys_state *css,
 		struct cftype *cft, s64 val)
 {
 	if (val < 0)
 		return -EINVAL;
 
-	atomic64_set(&cpuload_threshold, val);
+	atomic64_set(&cpuload_level, val);
 
 	return 0;
 }
 
-static ssize_t swapd_pressure_event_control(struct kernfs_open_file *of,
-		char *buf, size_t nbytes, loff_t off)
+static s64 swapid_read(struct cgroup_subsys_state *css, struct cftype *cft)
 {
-	int efd;
-	unsigned int level;
-	struct fd efile;
-	int ret;
-
-	buf = strstrip(buf);
-	if (sscanf(buf, "%d %u", &efd, &level) != 2)
-		return -EINVAL;
-
-	if (level >= LEVEL_COUNT)
-		return -EINVAL;
-
-	if (efd < 0)
-		return -EBADF;
-
-	mutex_lock(&pressure_event_lock);
-	efile = fdget(efd);
-	if (!efile.file) {
-		ret = -EBADF;
-		goto out;
-	}
-	swapd_press_efd[level] = eventfd_ctx_fileget(efile.file);
-	if (IS_ERR(swapd_press_efd[level])) {
-		ret = PTR_ERR(swapd_press_efd[level]);
-		goto out_put_efile;
-	}
-	fdput(efile);
-	mutex_unlock(&pressure_event_lock);
-	return nbytes;
-
-out_put_efile:
-	fdput(efile);
-out:
-	mutex_unlock(&pressure_event_lock);
-
-	return ret;
-}
-
-void swapd_pressure_report(enum swapd_pressure_level level)
-{
-	int ret;
-
-	if (swapd_press_efd[level] == NULL)
-		return;
-
-	ret = eventfd_signal(swapd_press_efd[level], 1);
-	hybp(HYB_INFO, "SWAP-MM: level:%u, ret:%d ", level, ret);
-}
-
-static s64 swapd_pid_read(struct cgroup_subsys_state *css, struct cftype *cft)
-{
-	return swapd_pid;
+	return swapid;
 }
 
 static void swapd_memcgs_param_parse(int level_num)
@@ -447,17 +386,17 @@ static void swapd_memcgs_param_parse(int level_num)
 	memcg_hybs_t *hybs = NULL;
 	int i;
 
-	while ((memcg = get_next_memcg(memcg))) {
+	while ((memcg = fetch_next_memcg(memcg))) {
 		hybs = MEMCGRP_ITEM_DATA(memcg);
 
 		for (i = 0; i < level_num; ++i) {
-			if (atomic64_read(&hybs->app_score) >= zswap_param[i].min_score &&
-					atomic64_read(&hybs->app_score) <= zswap_param[i].max_score)
+			if (atomic64_read(&hybs->app_grade) >= zswap_param[i].min_grade &&
+					atomic64_read(&hybs->app_grade) <= zswap_param[i].max_grade)
 				break;
 		}
-		atomic_set(&hybs->ub_mem2zram_ratio, zswap_param[i].ub_mem2zram_ratio);
-		atomic_set(&hybs->ub_zram2ufs_ratio, zswap_param[i].ub_zram2ufs_ratio);
-		atomic_set(&hybs->refault_threshold, zswap_param[i].refault_threshold);
+		atomic_set(&hybs->mem2zram_scale, zswap_param[i].mem2zram_scale);
+		atomic_set(&hybs->zram2ufs_scale, zswap_param[i].zram2ufs_scale);
+		atomic_set(&hybs->pagefault_level, zswap_param[i].pagefault_level);
 	}
 }
 
@@ -466,23 +405,23 @@ static void update_swapd_memcg_hybs(memcg_hybs_t *hybs)
 	int i;
 
 	for (i = 0; i < SWAPD_MAX_LEVEL_NUM; ++i) {
-		if (!zswap_param[i].min_score && !zswap_param[i].max_score)
+		if (!zswap_param[i].min_grade && !zswap_param[i].max_grade)
 			return;
 
-		if (atomic64_read(&hybs->app_score) >= zswap_param[i].min_score &&
-				atomic64_read(&hybs->app_score) <= zswap_param[i].max_score)
+		if (atomic64_read(&hybs->app_grade) >= zswap_param[i].min_grade &&
+				atomic64_read(&hybs->app_grade) <= zswap_param[i].max_grade)
 			break;
 	}
 
 	if (i == SWAPD_MAX_LEVEL_NUM)
 		return;
 
-	atomic_set(&hybs->ub_mem2zram_ratio, zswap_param[i].ub_mem2zram_ratio);
-	atomic_set(&hybs->ub_zram2ufs_ratio, zswap_param[i].ub_zram2ufs_ratio);
-	atomic_set(&hybs->refault_threshold, zswap_param[i].refault_threshold);
+	atomic_set(&hybs->mem2zram_scale, zswap_param[i].mem2zram_scale);
+	atomic_set(&hybs->zram2ufs_scale, zswap_param[i].zram2ufs_scale);
+	atomic_set(&hybs->pagefault_level, zswap_param[i].pagefault_level);
 }
 
-void update_swapd_memcg_param(struct mem_cgroup *memcg)
+void update_swapd_mcg_setup(struct mem_cgroup *memcg)
 {
 	memcg_hybs_t *hybs = MEMCGRP_ITEM_DATA(memcg);
 
@@ -517,39 +456,39 @@ static int update_swapd_memcgs_param(char *buf)
 		if (!token)
 			goto out;
 
-		if (kstrtoint(token, 0, &zswap_param[i].min_score) ||
-				zswap_param[i].min_score > MAX_APP_SCORE)
+		if (kstrtoint(token, 0, &zswap_param[i].min_grade) ||
+				zswap_param[i].min_grade > MAX_APP_GRADE)
 			goto out;
 
 		token = strsep(&buf, delim);
 		if (!token)
 			goto out;
 
-		if (kstrtoint(token, 0, &zswap_param[i].max_score) ||
-				zswap_param[i].max_score > MAX_APP_SCORE)
+		if (kstrtoint(token, 0, &zswap_param[i].max_grade) ||
+				zswap_param[i].max_grade > MAX_APP_GRADE)
 			goto out;
 
 		token = strsep(&buf, delim);
 		if (!token)
 			goto out;
 
-		if (kstrtoint(token, 0, &zswap_param[i].ub_mem2zram_ratio) ||
-				zswap_param[i].ub_mem2zram_ratio > MAX_RATIO)
+		if (kstrtoint(token, 0, &zswap_param[i].mem2zram_scale) ||
+				zswap_param[i].mem2zram_scale > MAX_RATIO)
 			goto out;
 
 		token = strsep(&buf, delim);
 		if (!token)
 			goto out;
 
-		if (kstrtoint(token, 0, &zswap_param[i].ub_zram2ufs_ratio) ||
-				zswap_param[i].ub_zram2ufs_ratio > MAX_RATIO)
+		if (kstrtoint(token, 0, &zswap_param[i].zram2ufs_scale) ||
+				zswap_param[i].zram2ufs_scale > MAX_RATIO)
 			goto out;
 
 		token = strsep(&buf, delim);
 		if (!token)
 			goto out;
 
-		if (kstrtoint(token, 0, &zswap_param[i].refault_threshold))
+		if (kstrtoint(token, 0, &zswap_param[i].pagefault_level))
 			goto out;
 	}
 
@@ -579,15 +518,15 @@ static int swapd_memcgs_param_show(struct seq_file *m, void *v)
 
 	for (i = 0; i < SWAPD_MAX_LEVEL_NUM; ++i) {
 		seq_printf(m, "level %d min score: %u\n",
-				i, zswap_param[i].min_score);
+				i, zswap_param[i].min_grade);
 		seq_printf(m, "level %d max score: %u\n",
-				i, zswap_param[i].max_score);
+				i, zswap_param[i].max_grade);
 		seq_printf(m, "level %d ub_mem2zram_ratio: %u\n",
-				i, zswap_param[i].ub_mem2zram_ratio);
+				i, zswap_param[i].mem2zram_scale);
 		seq_printf(m, "level %d ub_zram2ufs_ratio: %u\n",
-				i, zswap_param[i].ub_zram2ufs_ratio);
+				i, zswap_param[i].zram2ufs_scale);
 		seq_printf(m, "memcg %d refault_threshold: %u\n",
-				i, zswap_param[i].refault_threshold);
+				i, zswap_param[i].pagefault_level);
 	}
 
 	return 0;
@@ -616,13 +555,13 @@ static int swapd_nap_jiffies_show(struct seq_file *m, void *v)
 	return 0;
 }
 
-static ssize_t swapd_single_memcg_param_write(struct kernfs_open_file *of,
+static ssize_t swapd_single_mcg_setup_write(struct kernfs_open_file *of,
 		char *buf, size_t nbytes, loff_t off)
 {
 	struct mem_cgroup *memcg = mem_cgroup_from_css(of_css(of));
-	unsigned int ub_mem2zram_ratio;
-	unsigned int ub_zram2ufs_ratio;
-	unsigned int refault_threshold;
+	unsigned int mem2zram_scale;
+	unsigned int zram2ufs_scale;
+	unsigned int pagefault_level;
 	memcg_hybs_t *hybs = MEMCGRP_ITEM_DATA(memcg);
 
 	if (!hybs)
@@ -630,22 +569,21 @@ static ssize_t swapd_single_memcg_param_write(struct kernfs_open_file *of,
 
 	buf = strstrip(buf);
 
-	if (sscanf(buf, "%u %u %u", &ub_mem2zram_ratio, &ub_zram2ufs_ratio,
-				&refault_threshold) != 3)
+	if (sscanf(buf, "%u %u %u", &mem2zram_scale, &zram2ufs_scale,
+				&pagefault_level) != 3)
 		return -EINVAL;
 
-	if (ub_mem2zram_ratio > MAX_RATIO || ub_zram2ufs_ratio > MAX_RATIO)
+	if (mem2zram_scale > MAX_RATIO || zram2ufs_scale > MAX_RATIO)
 		return -EINVAL;
 
-	atomic_set(&MEMCGRP_ITEM(memcg, ub_mem2zram_ratio), ub_mem2zram_ratio);
-	atomic_set(&MEMCGRP_ITEM(memcg, ub_zram2ufs_ratio), ub_zram2ufs_ratio);
-	atomic_set(&MEMCGRP_ITEM(memcg, refault_threshold), refault_threshold);
+	atomic_set(&MEMCGRP_ITEM(memcg, mem2zram_scale), mem2zram_scale);
+	atomic_set(&MEMCGRP_ITEM(memcg, zram2ufs_scale), zram2ufs_scale);
+	atomic_set(&MEMCGRP_ITEM(memcg, pagefault_level), pagefault_level);
 
 	return nbytes;
 }
 
-
-static int swapd_single_memcg_param_show(struct seq_file *m, void *v)
+static int swapd_single_mcg_setup_show(struct seq_file *m, void *v)
 {
 	struct mem_cgroup *memcg = mem_cgroup_from_css(seq_css(m));
 	memcg_hybs_t *hybs = MEMCGRP_ITEM_DATA(memcg);
@@ -654,49 +592,49 @@ static int swapd_single_memcg_param_show(struct seq_file *m, void *v)
 		return -EINVAL;
 
 	seq_printf(m, "memcg score: %lu\n",
-			atomic64_read(&hybs->app_score));
+			atomic64_read(&hybs->app_grade));
 	seq_printf(m, "memcg ub_mem2zram_ratio: %u\n",
-			atomic_read(&hybs->ub_mem2zram_ratio));
+			atomic_read(&hybs->mem2zram_scale));
 	seq_printf(m, "memcg ub_zram2ufs_ratio: %u\n",
-			atomic_read(&hybs->ub_zram2ufs_ratio));
+			atomic_read(&hybs->zram2ufs_scale));
 	seq_printf(m, "memcg refault_threshold: %u\n",
-			atomic_read(&hybs->refault_threshold));
+			atomic_read(&hybs->pagefault_level));
 
 	return 0;
 }
 
-static int mem_cgroup_zram_wm_ratio_write(struct cgroup_subsys_state *css,
+static int mem_cgroup_zram_wm_scale_write(struct cgroup_subsys_state *css,
 		struct cftype *cft, s64 val)
 {
 	if (val > MAX_RATIO || val < MIN_RATIO)
 		return -EINVAL;
 
-	atomic64_set(&zram_wm_ratio, val);
+	atomic64_set(&zram_wm_scale, val);
 
 	return 0;
 }
 
-static s64 mem_cgroup_zram_wm_ratio_read(struct cgroup_subsys_state *css,
+static s64 mem_cgroup_zram_wm_scale_read(struct cgroup_subsys_state *css,
 		struct cftype *cft)
 {
-	return atomic64_read(&zram_wm_ratio);
+	return atomic64_read(&zram_wm_scale);
 }
 
-static int mem_cgroup_compress_ratio_write(struct cgroup_subsys_state *css,
+static int mem_cgroup_compress_scale_write(struct cgroup_subsys_state *css,
 		struct cftype *cft, s64 val)
 {
 	if (val > MAX_RATIO || val < MIN_RATIO)
 		return -EINVAL;
 
-	atomic64_set(&compress_ratio, val);
+	atomic64_set(&compress_scale, val);
 
 	return 0;
 }
 
-static s64 mem_cgroup_compress_ratio_read(struct cgroup_subsys_state *css,
+static s64 mem_cgroup_compress_scale_read(struct cgroup_subsys_state *css,
 		struct cftype *cft)
 {
-	return atomic64_read(&compress_ratio);
+	return atomic64_read(&compress_scale);
 }
 
 static int memcg_active_app_info_list_show(struct seq_file *m, void *v)
@@ -706,13 +644,13 @@ static int memcg_active_app_info_list_show(struct seq_file *m, void *v)
 	unsigned long zram_size;
 	unsigned long eswap_size;
 
-	while ((memcg = get_next_memcg(memcg))) {
-		u64 score;
+	while ((memcg = fetch_next_memcg(memcg))) {
+		u64 grade;
 
 		if (!MEMCGRP_ITEM_DATA(memcg))
 			continue;
 
-		score = atomic64_read(&MEMCGRP_ITEM(memcg, app_score));
+		grade = atomic64_read(&MEMCGRP_ITEM(memcg, app_grade));
 		anon_size = memcg_anon_pages(memcg);
 		eswap_size = hybridswap_read_mcg_stats(memcg,
 				MCG_DISK_STORED_PG_SZ);
@@ -730,14 +668,14 @@ static int memcg_active_app_info_list_show(struct seq_file *m, void *v)
 		eswap_size *= PAGE_SIZE / SZ_1K;
 
 		seq_printf(m, "%s %llu %lu %lu %lu %llu\n",
-				MEMCGRP_ITEM(memcg, name), score,
+				MEMCGRP_ITEM(memcg, name), grade,
 				anon_size, zram_size, eswap_size,
 				MEMCGRP_ITEM(memcg, reclaimed_pagefault));
 	}
 	return 0;
 }
 
-static unsigned long get_totalreserve_pages(void)
+static unsigned long fetch_totalreserve_pages(void)
 {
 	int nid;
 	unsigned long val = 0;
@@ -752,7 +690,7 @@ static unsigned long get_totalreserve_pages(void)
 	return val;
 }
 
-unsigned int system_cur_avail_buffers(void)
+unsigned int system_cur_usable_mem(void)
 {
 	unsigned long reclaimable;
 	long buffers;
@@ -781,19 +719,9 @@ unsigned int system_cur_avail_buffers(void)
 
 static bool min_buffer_is_suitable(void)
 {
-	u32 curr_buffers = system_cur_avail_buffers();
+	u32 curr_buffers = system_cur_usable_mem();
 
-	if (curr_buffers >= get_min_avail_buffers_value())
-		return true;
-
-	return false;
-}
-
-static bool buffer_is_suitable(void)
-{
-	u32 curr_buffers = system_cur_avail_buffers();
-
-	if (curr_buffers >= get_avail_buffers_value())
+	if (curr_buffers >= fetch_min_mem_watermark_value())
 		return true;
 
 	return false;
@@ -801,44 +729,41 @@ static bool buffer_is_suitable(void)
 
 bool high_buffer_is_suitable(void)
 {
-	u32 curr_buffers = system_cur_avail_buffers();
+	u32 curr_buffers = system_cur_usable_mem();
 
-	if (curr_buffers >= get_high_avail_buffers_value())
+	if (curr_buffers >= fetch_high_mem_watermark_value())
 		return true;
 
 	return false;
 }
 
-static void snapshot_anon_refaults(void)
+static void refresh_pagefaults(void)
 {
 	struct mem_cgroup *memcg = NULL;
 
-	while ((memcg = get_next_memcg(memcg))) {
+	while ((memcg = fetch_next_memcg(memcg))) {
 		MEMCGRP_ITEM(memcg, reclaimed_pagefault) =
 			hybridswap_read_mcg_stats(memcg, MCG_ANON_FAULT_CNT);
 	}
 
-	area_last_anon_pagefault = hybridswap_get_zram_pagefault();
-	last_anon_snapshot_time = jiffies;
+	infos_last_anon_pagefault = hybridswap_fetch_zram_pagefault();
+	last_refresh_t = jiffies;
 }
 
-/*
- * Return true means skip reclaim.
- */
-bool get_memcg_anon_refault_status(struct mem_cgroup *memcg,
+bool fetch_memcg_pagefault_status(struct mem_cgroup *memcg,
 		pg_data_t *pgdat)
 {
 	const unsigned int percent_constant = 100;
 	unsigned long long cur_anon_pagefault;
 	unsigned long anon_total;
-	unsigned long long ratio, thresh;
+	unsigned long long scale, thresh;
 	memcg_hybs_t *hybs;
 
 	if (!memcg || !MEMCGRP_ITEM_DATA(memcg))
 		return false;
 
 	hybs = MEMCGRP_ITEM_DATA(memcg);
-	thresh = atomic_read(&hybs->refault_threshold);
+	thresh = atomic_read(&hybs->pagefault_level);
 	if (thresh == 0)
 		return false;
 
@@ -849,24 +774,24 @@ bool get_memcg_anon_refault_status(struct mem_cgroup *memcg,
 	anon_total = memcg_anon_pages(memcg) +
 		hybridswap_read_mcg_stats(memcg, MCG_DISK_STORED_PG_SZ) +
 		hybridswap_read_mcg_stats(memcg, MCG_ZRAM_STORED_PG_SZ);
-	ratio = (cur_anon_pagefault - hybs->reclaimed_pagefault) *
+	scale = (cur_anon_pagefault - hybs->reclaimed_pagefault) *
 		percent_constant / (anon_total + 1);
-	hybp(HYB_INFO, "memcg %16s ratio %8llu threshold %8llu\n", hybs->name,
-			ratio, thresh);
+	hybp(HYB_INFO, "memcg %16s scale %8llu level %8llu\n", hybs->name,
+			scale, thresh);
 
-	if (ratio >= thresh)
+	if (scale >= thresh)
 		return true;
 
 	return false;
 }
 
-static bool hybridswap_ratio_ok(void)
+static bool hybridswap_scale_ok(void)
 {
-	struct hybridswap_stat *stat = NULL;
+	struct hybstatus *stat = NULL;
 
-	stat = hybridswap_get_stat_obj();
+	stat = hybridswap_fetch_stat_obj();
 	if (unlikely(!stat)) {
-		hybp(HYB_ERR, "can't get stat obj!\n");
+		hybp(HYB_ERR, "can't fetch stat obj!\n");
 
 		return false;
 	}
@@ -875,33 +800,33 @@ static bool hybridswap_ratio_ok(void)
 			atomic64_read(&stat->stored_pages));
 }
 
-static bool get_area_anon_refault_status(void)
+static bool fetch_infos_pagefault_status(void)
 {
 	const unsigned int percent_constant = 1000;
 	unsigned long long cur_anon_pagefault;
 	unsigned long long cur_time;
-	unsigned long long ratio = 0;
+	unsigned long long scale = 0;
 
-	cur_anon_pagefault = hybridswap_get_zram_pagefault();
+	cur_anon_pagefault = hybridswap_fetch_zram_pagefault();
 	cur_time = jiffies;
 
-	if (cur_anon_pagefault == area_last_anon_pagefault
-			|| cur_time == last_anon_snapshot_time)
+	if (cur_anon_pagefault == infos_last_anon_pagefault
+			|| cur_time == last_refresh_t)
 		goto false_out;
 
-	ratio = (cur_anon_pagefault - area_last_anon_pagefault) *
+	scale = (cur_anon_pagefault - infos_last_anon_pagefault) *
 		percent_constant / (jiffies_to_msecs(cur_time -
-					last_anon_snapshot_time) + 1);
+					last_refresh_t) + 1);
 
-	global_anon_refault_ratio = ratio;
+	total_pagefault_percent = scale;
 
-	if (ratio > get_area_anon_refault_threshold_value())
+	if (scale > fetch_infos_pagefault_level_value())
 		return true;
 
-	hybp(HYB_INFO, "current %llu t %llu last %llu t %llu ratio %llu refault_ratio %llu\n",
+	hybp(HYB_INFO, "current %llu t %llu last %llu t %llu scale %llu pagefault_scale %llu\n",
 			cur_anon_pagefault, cur_time,
-			area_last_anon_pagefault, last_anon_snapshot_time,
-			ratio, area_anon_refault_threshold);
+			infos_last_anon_pagefault, last_refresh_t,
+			scale, infos_pagefault_level);
 false_out:
 	return false;
 }
@@ -1065,30 +990,25 @@ struct cftype mem_cgroup_swapd_legacy_files[] = {
 	{
 		.name = "zram_wm_ratio",
 		.flags = CFTYPE_ONLY_ON_ROOT | CFTYPE_WORLD_WRITABLE,
-		.write_s64 = mem_cgroup_zram_wm_ratio_write,
-		.read_s64 = mem_cgroup_zram_wm_ratio_read,
+		.write_s64 = mem_cgroup_zram_wm_scale_write,
+		.read_s64 = mem_cgroup_zram_wm_scale_read,
 	},
 	{
 		.name = "compress_ratio",
 		.flags = CFTYPE_ONLY_ON_ROOT | CFTYPE_WORLD_WRITABLE,
-		.write_s64 = mem_cgroup_compress_ratio_write,
-		.read_s64 = mem_cgroup_compress_ratio_read,
-	},
-	{
-		.name = "swapd_pressure",
-		.flags = CFTYPE_ONLY_ON_ROOT | CFTYPE_WORLD_WRITABLE,
-		.write = swapd_pressure_event_control,
+		.write_s64 = mem_cgroup_compress_scale_write,
+		.read_s64 = mem_cgroup_compress_scale_read,
 	},
 	{
 		.name = "swapd_pid",
 		.flags = CFTYPE_ONLY_ON_ROOT,
-		.read_s64 = swapd_pid_read,
+		.read_s64 = swapid_read,
 	},
 	{
 		.name = "avail_buffers",
 		.flags = CFTYPE_ONLY_ON_ROOT | CFTYPE_WORLD_WRITABLE,
-		.write = avail_buffers_params_write,
-		.seq_show = avail_buffers_params_show,
+		.write = usable_mem_params_write,
+		.seq_show = usable_mem_params_show,
 	},
 	{
 		.name = "swapd_max_reclaim_size",
@@ -1099,14 +1019,14 @@ struct cftype mem_cgroup_swapd_legacy_files[] = {
 	{
 		.name = "area_anon_refault_threshold",
 		.flags = CFTYPE_ONLY_ON_ROOT | CFTYPE_WORLD_WRITABLE,
-		.write_s64 = area_anon_refault_threshold_write,
-		.read_s64 = area_anon_refault_threshold_read,
+		.write_s64 = infos_pagefault_level_write,
+		.read_s64 = infos_pagefault_level_read,
 	},
 	{
 		.name = "empty_round_skip_interval",
 		.flags = CFTYPE_ONLY_ON_ROOT | CFTYPE_WORLD_WRITABLE,
-		.write_s64 = empty_round_skip_interval_write,
-		.read_s64 = empty_round_skip_interval_read,
+		.write_s64 = nothing_ignore_skip_interval_write,
+		.read_s64 = nothing_ignore_skip_interval_read,
 	},
 	{
 		.name = "max_skip_interval",
@@ -1117,14 +1037,14 @@ struct cftype mem_cgroup_swapd_legacy_files[] = {
 	{
 		.name = "empty_round_check_threshold",
 		.flags = CFTYPE_ONLY_ON_ROOT | CFTYPE_WORLD_WRITABLE,
-		.write_s64 = empty_round_check_threshold_write,
-		.read_s64 = empty_round_check_threshold_read,
+		.write_s64 = nothing_ignore_check_level_write,
+		.read_s64 = nothing_ignore_check_level_read,
 	},
 	{
 		.name = "anon_refault_snapshot_min_interval",
 		.flags = CFTYPE_ONLY_ON_ROOT | CFTYPE_WORLD_WRITABLE,
-		.write_s64 = anon_refault_snapshot_min_interval_write,
-		.read_s64 = anon_refault_snapshot_min_interval_read,
+		.write_s64 = pagefault_refresh_min_write,
+		.read_s64 = pagefault_refresh_min_read,
 	},
 	{
 		.name = "swapd_memcgs_param",
@@ -1133,10 +1053,10 @@ struct cftype mem_cgroup_swapd_legacy_files[] = {
 		.seq_show = swapd_memcgs_param_show,
 	},
 	{
-		.name = "swapd_single_memcg_param",
+		.name = "swapd_single_mcg_setup",
 		.flags = CFTYPE_WORLD_WRITABLE,
-		.write = swapd_single_memcg_param_write,
-		.seq_show = swapd_single_memcg_param_show,
+		.write = swapd_single_mcg_setup_write,
+		.seq_show = swapd_single_mcg_setup_show,
 	},
 	{
 		.name = "zram_critical_threshold",
@@ -1147,8 +1067,8 @@ struct cftype mem_cgroup_swapd_legacy_files[] = {
 	{
 		.name = "cpuload_threshold",
 		.flags = CFTYPE_ONLY_ON_ROOT | CFTYPE_WORLD_WRITABLE,
-		.write_s64 = cpuload_threshold_write,
-		.read_s64 = cpuload_threshold_read,
+		.write_s64 = cpuload_level_write,
+		.read_s64 = cpuload_level_read,
 	},
 	{
 		.name = "reclaim_exceed_sleep_ms",
@@ -1183,64 +1103,64 @@ struct cftype mem_cgroup_swapd_legacy_files[] = {
 	{ }, /* terminate */
 };
 
-void wakeup_snapshotd(void)
+void wakeup_refresh_daemon(void)
 {
-	unsigned long curr_snapshot_interval =
-		jiffies_to_msecs(jiffies - last_anon_snapshot_time);
+	unsigned long curr_refresh =
+		jiffies_to_msecs(jiffies - last_refresh_t);
 
-	if (curr_snapshot_interval >=
-			get_anon_refault_snapshot_min_interval_value()) {
-		atomic_set(&snapshotd_wait_flag, 1);
-		wake_up_interruptible(&snapshotd_wait);
+	if (curr_refresh >=
+			fetch_pagefault_refresh_min_value()) {
+		atomic_set(&refresh_daemonwait_flag, 1);
+		wake_up_interruptible(&refresh_daemonwait);
 	}
 }
 
-static int snapshotd(void *p)
+static int refresh_daemon(void *p)
 {
 	int ret;
 
 	while (!kthread_should_stop()) {
-		ret = wait_event_interruptible(snapshotd_wait,
-				atomic_read(&snapshotd_wait_flag));
+		ret = wait_event_interruptible(refresh_daemonwait,
+				atomic_read(&refresh_daemonwait_flag));
 		if (ret)
 			continue;
 
 		if (unlikely(kthread_should_stop()))
 			break;
 
-		atomic_set(&snapshotd_wait_flag, 0);
+		atomic_set(&refresh_daemonwait_flag, 0);
 
-		snapshot_anon_refaults();
+		refresh_pagefaults();
 		count_swapd_event(SWAPD_SNAPSHOT_TIMES);
 	}
 
 	return 0;
 }
 
-static int snapshotd_run(void)
+static int refresh_daemonrun(void)
 {
-	atomic_set(&snapshotd_wait_flag, 0);
-	init_waitqueue_head(&snapshotd_wait);
-	snapshotd_task = kthread_run(snapshotd, NULL, "snapshotd");
+	atomic_set(&refresh_daemonwait_flag, 0);
+	init_waitqueue_head(&refresh_daemonwait);
+	refresh_daemontask = kthread_run(refresh_daemon, NULL, "snapshotd");
 
-	if (IS_ERR(snapshotd_task)) {
-		hybp(HYB_ERR, "Failed to start snapshotd\n");
-		return PTR_ERR(snapshotd_task);
+	if (IS_ERR(refresh_daemontask)) {
+		hybp(HYB_ERR, "Failed to start refresh_daemon\n");
+		return PTR_ERR(refresh_daemontask);
 	}
 
 	return 0;
 }
 
-static void snapshotd_exit(void)
+static void refresh_daemonexit(void)
 {
-	if (snapshotd_task) {
-		atomic_set(&snapshotd_wait_flag, 1);
-		kthread_stop(snapshotd_task);
+	if (refresh_daemontask) {
+		atomic_set(&refresh_daemonwait_flag, 1);
+		kthread_stop(refresh_daemontask);
 	}
-	snapshotd_task = NULL;
+	refresh_daemontask = NULL;
 }
 
-unsigned long get_nr_zram_total(void)
+unsigned long fetch_nr_zram_total(void)
 {
 	unsigned long nr_zram = 1;
 
@@ -1269,30 +1189,38 @@ u64 get_hybridswap_meminfo(const char *type)
 }
 EXPORT_SYMBOL(get_hybridswap_meminfo);
 
+static inline unsigned long hybridswap_fetch_zram_used_pages(void)
+{
+	if (swapd_zram)
+		return atomic64_read(&swapd_zram->stats.pages_stored);
+
+	return 0;
+}
+
 bool zram_watermark_ok(void)
 {
 	long long diff_buffers;
 	long long wm = 0;
-	long long cur_ratio = 0;
-	unsigned long zram_used = hybridswap_get_zram_used_pages();
+	long long cur_scale = 0;
+	unsigned long zram_used = hybridswap_fetch_zram_used_pages();
 	const unsigned int percent_constant = 100;
 
-	diff_buffers = get_high_avail_buffers_value() -
-		system_cur_avail_buffers();
+	diff_buffers = fetch_high_mem_watermark_value() -
+		system_cur_usable_mem();
 	diff_buffers *= SZ_1M / PAGE_SIZE;
-	diff_buffers *= get_compress_ratio_value() / 10;
-	diff_buffers = diff_buffers * percent_constant / get_nr_zram_total();
+	diff_buffers *= fetch_compress_scale_value() / 10;
+	diff_buffers = diff_buffers * percent_constant / fetch_nr_zram_total();
 
-	cur_ratio = zram_used * percent_constant / get_nr_zram_total();
-	wm  = min(get_zram_wm_ratio_value(), get_zram_wm_ratio_value()- diff_buffers);
+	cur_scale = zram_used * percent_constant / fetch_nr_zram_total();
+	wm  = min(fetch_zram_wm_scale_value(), fetch_zram_wm_scale_value()- diff_buffers);
 
-	return cur_ratio > wm;
+	return cur_scale > wm;
 }
 
 bool free_zram_is_ok(void)
 {
-	unsigned long nr_used = hybridswap_get_zram_used_pages();
-	unsigned long nr_total = get_nr_zram_total();
+	unsigned long nr_used = hybridswap_fetch_zram_used_pages();
+	unsigned long nr_total = fetch_nr_zram_total();
 	unsigned long reserve = nr_total >> 6;
 
 	return (nr_used < (nr_total - reserve));
@@ -1320,19 +1248,18 @@ static bool zram_need_swapout(void)
 bool zram_watermark_exceed(void)
 {
 	u64 nr_zram_used;
-	u64 nr_wm = get_zram_critical_threshold_value();
+	u64 nr_wm = fetch_zram_critical_level_value();
 
 	if (!nr_wm)
 		return false;
 
-	nr_zram_used = hybridswap_get_zram_used_pages();
+	nr_zram_used = hybridswap_fetch_zram_used_pages();
 
 	if (nr_zram_used > nr_wm)
 		return true;
 
 	return false;
 }
-
 
 #ifdef CONFIG_OPLUS_JANK
 static bool is_cpu_busy(void)
@@ -1346,8 +1273,8 @@ static bool is_cpu_busy(void)
 	for (i = 0; i < 6; i++)
 		cpumask_set_cpu(i, &mask);
 
-	cpuload = get_cpu_load(1, &mask);
-	if (cpuload > get_cpuload_threshold_value()) {
+	cpuload = fetch_cpu_load(1, &mask);
+	if (cpuload > fetch_cpuload_level_value()) {
 		hybp(HYB_INFO, "cpuload %d\n", cpuload);
 		return true;
 	}
@@ -1377,11 +1304,9 @@ static void wakeup_swapd(pg_data_t *pgdat)
 	if (!waitqueue_active(&hyb_task->swapd_wait))
 		return;
 
-	/* make anon pagefault snapshots */
-	if (atomic_read(&snapshotd_init_flag) == 1)
-		wakeup_snapshotd();
+	if (atomic_read(&refresh_daemoninit_flag) == 1)
+		wakeup_refresh_daemon();
 
-	/* wake up when the buffer is lower than min_avail_buffer */
 	if (min_buffer_is_suitable()) {
 		count_swapd_event(SWAPD_OVER_MIN_BUFFER_SKIP_TIMES);
 		return;
@@ -1414,7 +1339,7 @@ bool free_swap_is_low(void)
 
 	si_swapinfo(&info);
 
-	return (info.freeswap < get_free_swap_threshold_value());
+	return (info.freeswap < fetch_free_swap_level_value());
 }
 EXPORT_SYMBOL(free_swap_is_low);
 
@@ -1425,9 +1350,9 @@ static inline u64 __calc_nr_to_reclaim(void)
 	u64 max_reclaim_size_value;
 	u64 reclaim_size = 0;
 
-	high_buffers = get_high_avail_buffers_value();
-	curr_buffers = system_cur_avail_buffers();
-	max_reclaim_size_value = get_swapd_max_reclaim_size();
+	high_buffers = fetch_high_mem_watermark_value();
+	curr_buffers = system_cur_usable_mem();
+	max_reclaim_size_value = fetch_swapd_max_reclaim_size();
 	if (curr_buffers < high_buffers)
 		reclaim_size = high_buffers - curr_buffers;
 
@@ -1436,19 +1361,19 @@ static inline u64 __calc_nr_to_reclaim(void)
 	return reclaim_size * SZ_1M / PAGE_SIZE;
 }
 
-static inline u64 calc_shrink_ratio(pg_data_t *pgdat)
+static inline u64 calc_shrink_scale(pg_data_t *pgdat)
 {
 	struct mem_cgroup *memcg = NULL;
 	const u32 percent_constant = 100;
 	u64 total_can_reclaimed = 0;
 
-	while ((memcg = get_next_memcg(memcg))) {
+	while ((memcg = fetch_next_memcg(memcg))) {
 		s64 nr_anon, nr_zram, nr_eswap, total, can_reclaimed, thresh;
 		memcg_hybs_t *hybs;
 
 		hybs = MEMCGRP_ITEM_DATA(memcg);
-		thresh = atomic_read(&hybs->ub_mem2zram_ratio);
-		if (!thresh || get_memcg_anon_refault_status(memcg, pgdat)) {
+		thresh = atomic_read(&hybs->mem2zram_scale);
+		if (!thresh || fetch_memcg_pagefault_status(memcg, pgdat)) {
 			hybs->can_reclaimed = 0;
 			continue;
 		}
@@ -1463,7 +1388,7 @@ static inline u64 calc_shrink_ratio(pg_data_t *pgdat)
 			hybs->can_reclaimed = 0;
 		else
 			hybs->can_reclaimed = can_reclaimed - (nr_zram + nr_eswap);
-		hybp(HYB_INFO, "memcg %s can_reclaimed %lu nr_anon %lu zram %lu eswap %lu total %lu ratio %lu thresh %lu\n",
+		hybp(HYB_INFO, "memcg %s can_reclaimed %lu nr_anon %lu zram %lu eswap %lu total %lu scale %lu thresh %lu\n",
 				hybs->name, page_to_kb(hybs->can_reclaimed),
 				page_to_kb(nr_anon), page_to_kb(nr_zram),
 				page_to_kb(nr_eswap), page_to_kb(total),
@@ -1481,7 +1406,7 @@ static unsigned long swapd_shrink_anon(pg_data_t *pgdat,
 	struct mem_cgroup *memcg = NULL;
 	unsigned long nr_reclaimed = 0;
 	unsigned long reclaim_memcg_cnt = 0;
-	u64 total_can_reclaimed = calc_shrink_ratio(pgdat);
+	u64 total_can_reclaimed = calc_shrink_scale(pgdat);
 	unsigned long start_js = jiffies;
 	unsigned long reclaim_cycles;
 	bool exit = false;
@@ -1495,12 +1420,12 @@ static unsigned long swapd_shrink_anon(pg_data_t *pgdat,
 
 	reclaim_cycles = nr_to_reclaim / reclaim_size_per_cycle;
 	while (reclaim_cycles) {
-		while ((memcg = get_next_memcg(memcg))) {
+		while ((memcg = fetch_next_memcg(memcg))) {
 			unsigned long memcg_nr_reclaimed, memcg_to_reclaim;
 			memcg_hybs_t *hybs;
 
 			if (high_buffer_is_suitable()) {
-				get_next_memcg_break(memcg);
+				fetch_next_memcg_break(memcg);
 				exit = true;
 				break;
 			}
@@ -1518,7 +1443,7 @@ static unsigned long swapd_shrink_anon(pg_data_t *pgdat,
 					memcg_nr_reclaimed, memcg_to_reclaim);
 			nr_reclaimed += memcg_nr_reclaimed;
 			if (nr_reclaimed >= nr_to_reclaim) {
-				get_next_memcg_break(memcg);
+				fetch_next_memcg_break(memcg);
 				exit = true;
 				break;
 			}
@@ -1549,7 +1474,7 @@ static void swapd_shrink_node(pg_data_t *pgdat)
 	const unsigned int increase_rate = 2;
 	unsigned long nr_reclaimed = 0;
 	unsigned long nr_to_reclaim;
-	unsigned int before_avail = system_cur_avail_buffers();
+	unsigned int before_avail = system_cur_usable_mem();
 	unsigned int after_avail;
 
 #if IS_ENABLED(CONFIG_DRM_MSM) || IS_ENABLED(CONFIG_DRM_OPLUS_NOTIFY)
@@ -1589,22 +1514,22 @@ static void swapd_shrink_node(pg_data_t *pgdat)
 	nr_reclaimed = swapd_shrink_anon(pgdat, nr_to_reclaim);
 	swapd_last_window_shrink += PAGES_TO_MB(nr_reclaimed);
 
-	if (nr_reclaimed < get_empty_round_check_threshold_value()) {
+	if (nr_reclaimed < fetch_nothing_ignore_check_level_value()) {
 		count_swapd_event(SWAPD_EMPTY_ROUND);
 		if (last_round_is_empty)
 			swapd_skip_interval = min(swapd_skip_interval *
 					increase_rate,
-					get_max_skip_interval_value());
+					fetch_max_skip_interval_value());
 		else
 			swapd_skip_interval =
-				get_empty_round_skip_interval_value();
+				fetch_nothing_ignore_skip_interval_value();
 		last_round_is_empty = true;
 	} else {
 		swapd_skip_interval = 0;
 		last_round_is_empty = false;
 	}
 
-	after_avail = system_cur_avail_buffers();
+	after_avail = system_cur_usable_mem();
 	hybp(HYB_INFO, "total_reclaimed %lu KB, avail buffer %lu %lu MB, swapd_skip_interval %llu\n",
 			nr_reclaimed * 4, before_avail, after_avail, swapd_skip_interval);
 }
@@ -1615,20 +1540,18 @@ static int swapd(void *p)
 	struct task_struct *tsk = current;
 	struct hybridswapd_task* hyb_task = PGDAT_ITEM_DATA(pgdat);
 	static unsigned long last_reclaimin_jiffies = 0;
-	long fault_out_pause_value;
+	long page_fault_pause_value;
 	int display_un_blank = 1;
 
-	/* save swapd pid for schedule strategy */
-	swapd_pid = tsk->pid;
+	swapid = tsk->pid;
 
-	/* swapd do not runnint on super core */
 	cpumask_clear(&hyb_task->swapd_bind_cpumask);
 	(void)swapd_update_cpumask(tsk, SWAPD_DEFAULT_BIND_CPUS, pgdat);
 	set_freezable();
 
 	swapd_last_window_start = jiffies - swapd_shrink_window;
 	while (!kthread_should_stop()) {
-		bool refault = false;
+		bool pagefault = false;
 		u64 curr_buffers, avail;
 		u64 size, swapout_size = 0;
 
@@ -1638,10 +1561,9 @@ static int swapd(void *p)
 		if (unlikely(kthread_should_stop()))
 			break;
 		count_swapd_event(SWAPD_WAKEUP);
-		/*swapd_pressure_report(LEVEL_LOW);*/
 
-		if (get_area_anon_refault_status() && hybridswap_ratio_ok()) {
-			refault = true;
+		if (fetch_infos_pagefault_status() && hybridswap_scale_ok()) {
+			pagefault = true;
 			count_swapd_event(SWAPD_REFAULT);
 			goto do_eswap;
 		}
@@ -1649,21 +1571,21 @@ static int swapd(void *p)
 		swapd_shrink_node(pgdat);
 		last_swapd_time = jiffies;
 do_eswap:
-		fault_out_pause_value = atomic_long_read(&fault_out_pause);
+		page_fault_pause_value = atomic_long_read(&page_fault_pause);
 #if IS_ENABLED(CONFIG_DRM_MSM) || IS_ENABLED(CONFIG_DRM_OPLUS_NOTIFY)
 		display_un_blank = !atomic_read(&display_off);
 #endif
 		if (!hybridswap_reclaim_work_running() && display_un_blank &&
-				(zram_need_swapout() || refault) && !fault_out_pause_value &&
+				(zram_need_swapout() || pagefault) && !page_fault_pause_value &&
 				jiffies_to_msecs(jiffies - last_reclaimin_jiffies) >= 50) {
-			avail = get_high_avail_buffers_value();
-			curr_buffers = system_cur_avail_buffers();
+			avail = fetch_high_mem_watermark_value();
+			curr_buffers = system_cur_usable_mem();
 
 			if (curr_buffers < avail) {
 				size = (avail - curr_buffers) * SZ_1M;
 				size = min_t(u64, size, max_reclaimin_size);
 #ifdef CONFIG_HYBRIDSWAP_CORE
-				swapout_size = hybridswap_reclaim_in(size);
+				swapout_size = hybridswap_out_to_eswap(size);
 				count_swapd_event(SWAPD_SWAPOUT);
 				last_reclaimin_jiffies = jiffies;
 #endif
@@ -1676,21 +1598,11 @@ do_eswap:
 				count_swapd_event(SWAPD_SKIP_SWAPOUT);
 			}
 		}
-
-		if (!buffer_is_suitable()) {
-			if (free_swap_is_low() || zram_watermark_exceed()) {
-				swapd_pressure_report(LEVEL_CRITICAL);
-				count_swapd_event(SWAPD_CRITICAL_PRESS);
-			}
-		}
 	}
 
 	return 0;
 }
 
-/*
- * This swapd start function will be called by init and node-hot-add.
- */
 int swapd_run(int nid)
 {
 	pg_data_t *pgdat = NODE_DATA(nid);
@@ -1719,10 +1631,6 @@ int swapd_run(int nid)
 	return 0;
 }
 
-/*
- * Called by memory hotplug when all memory in a node is offlined.  Caller must
- * hold mem_hotplug_begin/end().
- */
 void swapd_stop(int nid)
 {
 	struct pglist_data *pgdata = NODE_DATA(nid);
@@ -1743,7 +1651,7 @@ void swapd_stop(int nid)
 		hyb_task->swapd = NULL;
 	}
 
-	swapd_pid = -1;
+	swapid = -1;
 }
 
 static int mem_hotplug_swapd_notifier(struct notifier_block *nb,
@@ -1777,7 +1685,6 @@ static int swapd_cpu_online(unsigned int cpu)
 		mask = &hyb_task->swapd_bind_cpumask;
 
 		if (cpumask_any_and(cpu_online_mask, mask) < nr_cpu_ids)
-			/* One of our CPUs online: restore mask */
 			set_cpus_allowed_ptr(PGDAT_ITEM(pgdat, swapd), mask);
 	}
 	return 0;
@@ -1919,7 +1826,7 @@ static int bright_fb_notifier_callback(struct notifier_block *self,
 
 void __init swapd_pre_init(void)
 {
-	all_totalreserve_pages = get_totalreserve_pages();
+	all_totalreserve_pages = fetch_totalreserve_pages();
 }
 
 void swapd_pre_deinit(void)
@@ -1946,10 +1853,10 @@ int swapd_init(struct zram *zram)
 	}
 #endif
 
-	ret = snapshotd_run();
+	ret = refresh_daemonrun();
 	if (ret) {
-		hybp(HYB_ERR, "snapshotd_run failed, ret=%d\n", ret);
-		goto snapshotd_fail;
+		hybp(HYB_ERR, "refresh_daemonrun failed, ret=%d\n", ret);
+		goto refresh_daemonfail;
 	}
 
 	ret = create_swapd_thread(zram);
@@ -1963,8 +1870,8 @@ int swapd_init(struct zram *zram)
 	return 0;
 
 create_swapd_fail:
-	snapshotd_exit();
-snapshotd_fail:
+	refresh_daemonexit();
+refresh_daemonfail:
 #if IS_ENABLED(CONFIG_DRM_MSM) || IS_ENABLED(CONFIG_DRM_OPLUS_NOTIFY)
 	msm_drm_unregister_client(&fb_notif);
 msm_drm_register_fail:
@@ -1976,7 +1883,7 @@ msm_drm_register_fail:
 void swapd_exit(void)
 {
 	destroy_swapd_thread();
-	snapshotd_exit();
+	refresh_daemonexit();
 #if IS_ENABLED(CONFIG_DRM_MSM) || IS_ENABLED(CONFIG_DRM_OPLUS_NOTIFY)
 	msm_drm_unregister_client(&fb_notif);
 #endif

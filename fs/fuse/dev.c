@@ -1034,20 +1034,25 @@ static int fuse_copy_pages(struct fuse_copy_state *cs, unsigned nbytes,
 {
 	unsigned i;
 	struct fuse_req *req = cs->req;
+	int err;
 
+	if (req->ff)
+		spin_lock(&req->ff->fc->lock);
 	for (i = 0; i < req->num_pages && (nbytes || zeroing); i++) {
-		int err;
 		unsigned offset = req->page_descs[i].offset;
 		unsigned count = min(nbytes, req->page_descs[i].length);
 
 		err = fuse_copy_page(cs, &req->pages[i], offset, count,
 				     zeroing);
 		if (err)
-			return err;
+			goto err;
 
 		nbytes -= count;
 	}
-	return 0;
+err:
+	if (req->ff)
+		spin_unlock(&req->ff->fc->lock);
+	return err;
 }
 
 /* Copy a single argument in the request to/from userspace buffer */
